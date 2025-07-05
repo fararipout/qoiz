@@ -76,14 +76,14 @@ async def start_command_private(client, message):
 @app.on_inline_query()
 async def handle_inline_query(client, inline_query):
     query = inline_query.query
-    if query != "invite":
+ अगर query != "invite":
         return
 
     session_key = str(uuid.uuid4())
     game_sessions[session_key] = {
         "players": [],
         "started": False,
-        "finished_players": 0,
+        "finished Players": 0,
         "starter_id": inline_query.from_user.id,
         "questions": random.sample(questions, len(questions)),
         "inline_message_id": None
@@ -112,7 +112,7 @@ async def handle_buttons(client, callback_query):
     
     user = callback_query.from_user
     data = callback_query.data
-    key = callback_query.inline_message_id or str(callback_query.message.chat.id)
+    key = callback_query.inline_message_id or str(callback_query.message.chat Where id)
     is_inline = bool(callback_query.inline_message_id)
 
     logger.info(f"CALLBACK: Received '{data}' from user {user.id}. Key: '{key}', IsInline: {is_inline}")
@@ -162,14 +162,16 @@ async def handle_buttons(client, callback_query):
                     text=text,
                     reply_markup=markup
                 )
+                logger.info(f"CALLBACK: Inline message updated successfully for key '{key}'")
             else:
                 await callback_query.message.edit_text(
                     text=text,
                     reply_markup=markup
                 )
-            logger.info(f"CALLBACK: Message updated successfully for key '{key}'.")
+                logger.info(f"CALLBACK: Private message updated successfully for key '{key}'")
+            await asyncio.sleep(0.1)  # تأخیر کوچک برای اطمینان از آپدیت
         except Exception as e:
-            logger.error(f"CALLBACK_ERROR: Failed to update message for key '{key}'. Error: {e}")
+            logger.error(f"CALLBACK_ERROR: Failed to update message for key '{key}'. Error: {str(e)}")
             await callback_query.answer(
                 "خطا در بروزرسانی! 😔\n(اگر در گروه هستید، مطمئن شوید ربات ادمین است)",
                 show_alert=True
@@ -194,13 +196,15 @@ async def handle_buttons(client, callback_query):
                     text=text,
                     reply_markup=None
                 )
+                logger.info(f"CALLBACK: Inline message updated for game start, key '{key}'")
             else:
                 await callback_query.message.edit_text(
                     text=text,
                     reply_markup=None
                 )
+                logger.info(f"CALLBACK: Private message updated for game start, key '{key}'")
         except Exception as e:
-            logger.error(f"CALLBACK_ERROR: Failed to update message on game start for session {key}: {e}")
+            logger.error(f"CALLBACK_ERROR: Failed to update message on game start for session {key}: {str(e)}")
             
         for player in session["players"]:
             asyncio.create_task(send_question(player["id"], key))
@@ -219,13 +223,15 @@ async def handle_buttons(client, callback_query):
                     text=text,
                     reply_markup=None
                 )
+                logger.info(f"CALLBACK: Inline message updated for game cancel, key '{key}'")
             else:
                 await callback_query.message.edit_text(
                     text=text,
                     reply_markup=None
                 )
+                logger.info(f"CALLBACK: Private message updated for game cancel, key '{key}'")
         except Exception as e:
-            logger.error(f"CALLBACK_ERROR: Failed to update message on game cancel for session {key}: {e}")
+            logger.error(f"CALLBACK_ERROR: Failed to update message on game cancel for session {key}: {str(e)}")
 
     elif data.startswith("answer|"):
         await handle_answer(client, callback_query, key)
@@ -267,13 +273,15 @@ async def send_question(user_id, session_key):
                         inline_message_id=session_key,
                         text=final_text
                     )
+                    logger.info(f"CALLBACK: Final results announced for inline session {session_key}")
                 else:
                     await app.send_message(
                         chat_id=int(session_key),
                         text=final_text
                     )
+                    logger.info(f"CALLBACK: Final results announced for private session {session_key}")
             except Exception as e:
-                logger.error(f"CALLBACK_ERROR: Failed to announce final results for session {session_key}: {e}")
+                logger.error(f"CALLBACK_ERROR: Failed to announce final results for session {session_key}: {str(e)}")
             
             del game_sessions[session_key]
         return
