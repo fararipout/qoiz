@@ -6,7 +6,6 @@ import time
 import uuid
 import logging
 import random
-# import re # دیگر نیازی به این نیست
 
 # تنظیم لاگ دقیق‌تر برای عیب‌یابی
 logging.basicConfig(
@@ -195,10 +194,8 @@ async def handle_buttons(client, callback_query):
             logger.warning(f"CALLBACK: No existing session found for inline message ID '{current_key}'. This might be an old message. Answering with expiry message.")
             await callback_query.answer("این بازی منقضی شده یا قبلاً بسته شده است. لطفا یک بازی جدید شروع کنید.", show_alert=True)
             try:
-                # برای پیام های اینلاین، message خود object نیست، فقط message_id هست.
-                # بنابراین نیازی به callback_query.message.text نیست.
-                # اینجا فقط پیام رو ویرایش می‌کنیم.
-                await client.edit_inline_message_text(
+                # استفاده از app.edit_inline_message_text به جای client.edit_inline_message_text
+                await app.edit_inline_message_text( # تغییر در اینجا
                     inline_message_id=current_key,
                     text="این بازی منقضی شده است. لطفا یک بازی جدید شروع کنید.",
                     reply_markup=None
@@ -217,7 +214,10 @@ async def handle_buttons(client, callback_query):
             logger.warning(f"CALLBACK: No existing session found for private chat ID '{current_key}'. This might be an old message. Answering with expiry message.")
             await callback_query.answer("این بازی منقضی شده یا قبلاً بسته شده است. لطفا یک بازی جدید شروع کنید.", show_alert=True)
             try:
-                await callback_query.message.edit_text(
+                # استفاده از app.edit_message_text به جای client.edit_message_text
+                await app.edit_message_text( # تغییر در اینجا
+                    chat_id=session["main_chat_id"],
+                    message_id=session["main_message_id"],
                     text="این بازی منقضی شده است. لطفا یک بازی جدید شروع کنید.",
                     reply_markup=None
                 )
@@ -258,18 +258,20 @@ async def handle_buttons(client, callback_query):
         # دیگر نیازی به افزودن UUID به متن نیست زیرا از روش دیگری برای شناسایی session استفاده می‌کنیم.
 
         markup = get_initial_markup(session)
-        logger.info(f"CALLBACK: Attempting to update message for session '{current_key}' with text: {text_to_update[:100]}... and {len(session['players'])} players")
+        logger.info(f"CALLBACK: Attempting to update message for session '{current_key}' with text: {text_to_update[:100]}... and {len(session['players'])}")
 
         try:
             if session["is_inline_message"]:
-                await client.edit_inline_message_text(
+                # استفاده از app.edit_inline_message_text به جای client.edit_inline_message_text
+                await app.edit_inline_message_text( # تغییر در اینجا
                     inline_message_id=session["main_message_id"],
                     text=text_to_update,
                     reply_markup=markup
                 )
                 logger.info(f"CALLBACK: Inline message updated successfully for key '{current_key}' using {session['main_message_id']}")
             else: # Private message
-                await client.edit_message_text(
+                # استفاده از app.edit_message_text به جای client.edit_message_text
+                await app.edit_message_text( # تغییر در اینجا
                     chat_id=session["main_chat_id"],
                     message_id=session["main_message_id"],
                     text=text_to_update,
@@ -300,14 +302,16 @@ async def handle_buttons(client, callback_query):
 
         try:
             if session["is_inline_message"]:
-                await client.edit_inline_message_text(
+                # استفاده از app.edit_inline_message_text به جای client.edit_inline_message_text
+                await app.edit_inline_message_text( # تغییر در اینجا
                     inline_message_id=session["main_message_id"],
                     text=text_to_update,
                     reply_markup=None
                 )
                 logger.info(f"CALLBACK: Inline message updated for game start, key '{current_key}'")
             else:
-                await client.edit_message_text(
+                # استفاده از app.edit_message_text به جای client.edit_message_text
+                await app.edit_message_text( # تغییر در اینجا
                     chat_id=session["main_chat_id"],
                     message_id=session["main_message_id"],
                     text=text_to_update,
@@ -332,14 +336,16 @@ async def handle_buttons(client, callback_query):
 
         try:
             if session["is_inline_message"]:
-                await client.edit_inline_message_text(
+                # استفاده از app.edit_inline_message_text به جای client.edit_inline_message_text
+                await app.edit_inline_message_text( # تغییر در اینجا
                     inline_message_id=session["main_message_id"],
                     text=text_to_update,
                     reply_markup=None
                 )
                 logger.info(f"CALLBACK: Inline message updated for game cancel, key '{current_key}'")
             else:
-                await client.edit_message_text(
+                # استفاده از app.edit_message_text به جای client.edit_message_text
+                await app.edit_message_text( # تغییر در اینجا
                     chat_id=session["main_chat_id"],
                     message_id=session["main_message_id"],
                     text=text_to_update,
@@ -397,16 +403,17 @@ async def send_question(user_id, session_key):
                 final_text += f"{'🥇' if i == 0 else '🥈' if i == 1 else '🥉' if i == 2 else '▫️'} {p['name']}: {p['score']} امتیاز\n"
 
             try:
-                # استفاده از is_inline_message برای تعیین نوع ویرایش
+                # استفاده از app.edit_inline_message_text به جای client.edit_inline_message_text
                 if session["is_inline_message"]:
-                    await app.edit_inline_message_text(
+                    await app.edit_inline_message_text( # تغییر در اینجا
                         inline_message_id=session["main_message_id"],
                         text=final_text,
                         reply_markup=None # نتایج نهایی دکمه‌ای ندارد
                     )
                     logger.info(f"Final results announced for inline session {session_key}")
                 else: # Private message
-                    await app.edit_message_text(
+                    # استفاده از app.edit_message_text به جای client.edit_message_text
+                    await app.edit_message_text( # تغییر در اینجا
                         chat_id=session["main_chat_id"],
                         message_id=session["main_message_id"],
                         text=final_text,
@@ -476,7 +483,7 @@ async def handle_answer(client, callback_query, session_key):
         logger.warning(f"HANDLE_ANSWER: Session {session_key} not found for user {callback_query.from_user.id}. Message {callback_query.message.id} is outdated.")
         try:
             # برای پیام‌های خصوصی، message.id و edit_text استفاده می‌شود
-            # برای پیام‌های اینلاین، این بخش اجرا نمی‌شود چون message.id ندارد
+            # برای پیام‌های اینلاین، این بخش اجرا نمی‌شود چون message آبجکت ندارد.
             if callback_query.message: # اگر message آبجکت وجود دارد (یعنی پیام خصوصی است)
                 await callback_query.message.edit_text("این بازی منقضی شده یا قبلاً بسته شده است. لطفا یک بازی جدید شروع کنید.", reply_markup=None)
         except Exception as e:
