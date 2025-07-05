@@ -130,14 +130,15 @@ async def handle_buttons(client, callback_query):
 
     session = game_sessions[key]
     if is_inline and not session["inline_message_id"]:
-        session["inline_message_id"] = key  # ذخیره آیدی پیام اینلاین
+        session["inline_message_id"] = key
+        logger.info(f"CALLBACK: Inline message ID set to '{key}' for session")
 
     if data == "im_in":
         if session["started"]:
             return await callback_query.answer("🚫 بازی شروع شده و نمی‌توانید اضافه شوید!", show_alert=True)
             
+        player_name = user.first_name or user.username or f"User_{user.id}"
         if user.id not in [p["id"] for p in session["players"]]:
-            player_name = user.first_name or user.username or f"User_{user.id}"
             session["players"].append({
                 "id": user.id,
                 "name": player_name,
@@ -153,11 +154,19 @@ async def handle_buttons(client, callback_query):
         
         text = "🎉 به چالش اطلاعات خوش آمدید!\nبرای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\n\n" + get_players_text(session)
         markup = get_initial_markup(session)
+        logger.info(f"CALLBACK: Attempting to update message with text: {text[:50]}... and {len(session['players'])} players")
         try:
             if is_inline:
-                await client.edit_inline_message_text(inline_message_id=key, text=text, reply_markup=markup)
+                await client.edit_message_text(
+                    inline_message_id=key,
+                    text=text,
+                    reply_markup=markup
+                )
             else:
-                await callback_query.message.edit_text(text, reply_markup=markup)
+                await callback_query.message.edit_text(
+                    text=text,
+                    reply_markup=markup
+                )
             logger.info(f"CALLBACK: Message updated successfully for key '{key}'.")
         except Exception as e:
             logger.error(f"CALLBACK_ERROR: Failed to update message for key '{key}'. Error: {e}")
@@ -180,11 +189,18 @@ async def handle_buttons(client, callback_query):
         text = "🚀 بازی شروع شد! سوالات به صورت خصوصی برایتان ارسال می‌شود..."
         try:
             if is_inline:
-                await client.edit_inline_message_text(inline_message_id=key, text=text, reply_markup=None)
+                await client.edit_message_text(
+                    inline_message_id=key,
+                    text=text,
+                    reply_markup=None
+                )
             else:
-                await callback_query.message.edit_text(text, reply_markup=None)
+                await callback_query.message.edit_text(
+                    text=text,
+                    reply_markup=None
+                )
         except Exception as e:
-            logger.error(f"Error editing message on game start for session {key}: {e}")
+            logger.error(f"CALLBACK_ERROR: Failed to update message on game start for session {key}: {e}")
             
         for player in session["players"]:
             asyncio.create_task(send_question(player["id"], key))
@@ -198,11 +214,18 @@ async def handle_buttons(client, callback_query):
         text = "❌ بازی توسط شروع‌کننده لغو شد."
         try:
             if is_inline:
-                await client.edit_inline_message_text(inline_message_id=key, text=text, reply_markup=None)
+                await client.edit_message_text(
+                    inline_message_id=key,
+                    text=text,
+                    reply_markup=None
+                )
             else:
-                await callback_query.message.edit_text(text, reply_markup=None)
+                await callback_query.message.edit_text(
+                    text=text,
+                    reply_markup=None
+                )
         except Exception as e:
-            logger.error(f"Error editing message on game cancel for session {key}: {e}")
+            logger.error(f"CALLBACK_ERROR: Failed to update message on game cancel for session {key}: {e}")
 
     elif data.startswith("answer|"):
         await handle_answer(client, callback_query, key)
@@ -240,11 +263,17 @@ async def send_question(user_id, session_key):
 
             try:
                 if not session_key.isdigit():
-                    await app.edit_inline_message_text(inline_message_id=session_key, text=final_text)
+                    await app.edit_message_text(
+                        inline_message_id=session_key,
+                        text=final_text
+                    )
                 else:
-                    await app.send_message(int(session_key), final_text)
+                    await app.send_message(
+                        chat_id=int(session_key),
+                        text=final_text
+                    )
             except Exception as e:
-                logger.error(f"Failed to announce final results for session {session_key}: {e}")
+                logger.error(f"CALLBACK_ERROR: Failed to announce final results for session {session_key}: {e}")
             
             del game_sessions[session_key]
         return
