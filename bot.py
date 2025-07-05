@@ -100,7 +100,7 @@ async def handle_inline_query(client, inline_query):
                 "🎉 به چالش اطلاعات خوش آمدید!\nبرای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\n\n" + get_players_text(game_sessions[session_key])
             ),
             reply_markup=markup,
-            description="دوستانت رو به چالش دعوت کن!"
+            description="دوستانتty to challenge!"
         )
     ]
     await inline_query.answer(results, cache_time=1)
@@ -157,7 +157,7 @@ async def handle_buttons(client, callback_query):
         logger.info(f"CALLBACK: Attempting to update message with text: {text[:50]}... and {len(session['players'])} players")
         try:
             if is_inline:
-                await client.edit_message_text(
+                await client.edit_inline_message_text(
                     inline_message_id=key,
                     text=text,
                     reply_markup=markup
@@ -191,7 +191,7 @@ async def handle_buttons(client, callback_query):
         text = "🚀 بازی شروع شد! سوالات به صورت خصوصی برایتان ارسال می‌شود..."
         try:
             if is_inline:
-                await client.edit_message_text(
+                await client.edit_inline_message_text(
                     inline_message_id=key,
                     text=text,
                     reply_markup=None
@@ -218,7 +218,7 @@ async def handle_buttons(client, callback_query):
         text = "❌ بازی توسط شروع‌کننده لغو شد."
         try:
             if is_inline:
-                await client.edit_message_text(
+                await client.edit_inline_message_text(
                     inline_message_id=key,
                     text=text,
                     reply_markup=None
@@ -269,7 +269,7 @@ async def send_question(user_id, session_key):
 
             try:
                 if not session_key.isdigit():
-                    await app.edit_message_text(
+                    await app.edit_inline_message_text(
                         inline_message_id=session_key,
                         text=final_text
                     )
