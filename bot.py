@@ -1,12 +1,12 @@
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InlineQueryResultArticle, InputTextMessageContent
-from tes.question import questions
+from tes.question import questions # فرض می‌کنیم فایل tes/question.py شما وجود دارد
 import asyncio
 import time
 import uuid
 import logging
 import random
-import re # برای استخراج UUID از متن پیام
+# import re # دیگر نیازی به این نیست
 
 # تنظیم لاگ دقیق‌تر برای عیب‌یابی
 logging.basicConfig(
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # راه‌اندازی ربات
 API_ID = '3335796'
 API_HASH = '138b992a0e672e8346d8439c3f42ea78'
-BOT_TOKEN = '7136875110:AAGr1EREy_qPMgxVbuE4B0cHGVcwWudOrus'
+BOT_TOKEN = '7136875110:AAGr1EREy_qPMgxVbuE4B0cHGVcwWudOrus' # توکن ربات خود را اینجا قرار دهید
 
 app = Client("watermark_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -33,6 +33,11 @@ logger.info(f"Pyrogram version: {pyrogram.__version__}")
 # game_sessions حالا برای پیام‌های اینلاین از inline_message_id واقعی به عنوان کلید استفاده می‌کند.
 # برای پیام‌های خصوصی، از chat_id استفاده می‌شود.
 game_sessions = {}
+
+# نگاشت (map) بین query result ID (که Pyrogram تولید می‌کند) و UUID موقت ما
+# این برای زمانی است که کاربر برای اولین بار روی یک پیام اینلاین کلیک می‌کند.
+inline_query_result_id_to_temp_uuid = {}
+
 
 # تابع کمکی برای ایجاد متن لیست بازیکنان
 def get_players_text(session):
@@ -102,9 +107,11 @@ async def handle_inline_query(client, inline_query):
     if query != "invite":
         return
 
-    # تولید یک UUID موقت برای نگهداری اطلاعات جلسه تا زمانی که inline_message_id واقعی بدست آید
-    temp_uuid_key = str(uuid.uuid4())
-    game_sessions[temp_uuid_key] = {
+    # تولید یک UUID موقت برای نگهداری اطلاعات جلسه
+    temp_uuid_game_session = str(uuid.uuid4())
+    temp_uuid_query_result = str(uuid.uuid4()) # ID برای InlineQueryResultArticle
+
+    game_sessions[temp_uuid_game_session] = {
         "players": [],
         "started": False,
         "finished_players": 0,
@@ -113,24 +120,24 @@ async def handle_inline_query(client, inline_query):
         "is_inline_message": True, # مشخص می‌کند که این یک پیام اینلاین است
         "main_message_id": None,    # این بعداً ست می‌شود (inline_message_id)
         "main_chat_id": None,       # این برای inline message استفاده نمی‌شود
-        "temp_uuid": temp_uuid_key  # ذخیره UUID موقت در session_data
+        "temp_uuid_game_session": temp_uuid_game_session # ذخیره UUID موقت در session_data
     }
+    # نگاشت Query Result ID به UUID موقت جلسه
+    inline_query_result_id_to_temp_uuid[temp_uuid_query_result] = temp_uuid_game_session
 
-    logger.info(f"INLINE_QUERY: New temporary session created with key '{temp_uuid_key}'")
+    logger.info(f"INLINE_QUERY: New temporary game session created with key '{temp_uuid_game_session}' (mapped from Query Result ID: {temp_uuid_query_result})")
 
-    markup = get_initial_markup(game_sessions[temp_uuid_key])
+    markup = get_initial_markup(game_sessions[temp_uuid_game_session])
 
-    # قرار دادن UUID موقت در متن پیام برای استخراج در callback_query
     initial_message_text = (
         "🎉 به چالش اطلاعات خوش آمدید!\n"
         "برای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\n\n"
-        f"{get_players_text(game_sessions[temp_uuid_key])}\n"
-        f"" # اضافه کردن UUID به عنوان کامنت HTML برای پنهان بودن
+        f"{get_players_text(game_sessions[temp_uuid_game_session])}"
     )
 
     results = [
         InlineQueryResultArticle(
-            id=str(uuid.uuid4()), # id برای هر نتیجه اینلاین باید منحصر به فرد باشد
+            id=temp_uuid_query_result, # استفاده از UUID برای ID نتیجه کوئری
             title="دعوت به چالش!",
             input_message_content=InputTextMessageContent(initial_message_text),
             reply_markup=markup,
@@ -138,18 +145,20 @@ async def handle_inline_query(client, inline_query):
         )
     ]
     await inline_query.answer(results, cache_time=1)
-    logger.info(f"INLINE_QUERY: Answered for query '{query}' with temp_uuid '{temp_uuid_key}' in message content.")
+    logger.info(f"INLINE_QUERY: Answered for query '{query}' with Query Result ID '{temp_uuid_query_result}' which maps to temp_game_session '{temp_uuid_game_session}'.")
 
 
 # هندل دکمه‌ها
 @app.on_callback_query()
 async def handle_buttons(client, callback_query):
     global game_sessions
+    global inline_query_result_id_to_temp_uuid # برای دسترسی به نگاشت UUID ها
 
     user = callback_query.from_user
     data = callback_query.data
 
     current_key = None
+    session = None
     is_inline_message_callback = bool(callback_query.inline_message_id)
 
     if is_inline_message_callback:
@@ -162,39 +171,40 @@ async def handle_buttons(client, callback_query):
         if session:
             logger.info(f"CALLBACK: Found existing inline session with key '{current_key}'.")
         else:
-            # 2. اگر پیدا نشد، پیام اصلی را برای یافتن UUID موقت آن بررسی می‌کنیم
-            # این حالت برای اولین callback از پیام اینلاین اتفاق می‌افتد.
-            original_message_text = callback_query.message.text
-            match = re.search(r"", original_message_text)
+            # 2. اگر پیدا نشد، به دنبال UUID موقت از نگاشت inline_query_result_id_to_temp_uuid می‌گردیم
+            # callback_query.id در اینجا همان ID مربوط به InlineQueryResultArticle است که در on_inline_query تنظیم کردیم.
+            temp_uuid_game_session = inline_query_result_id_to_temp_uuid.pop(callback_query.id, None)
 
-            if match:
-                temp_uuid = match.group(1)
-                logger.info(f"CALLBACK: Extracted temporary UUID '{temp_uuid}' from message text.")
+            if temp_uuid_game_session:
+                logger.info(f"CALLBACK: Found temporary game session UUID '{temp_uuid_game_session}' from callback_query.id: '{callback_query.id}'.")
 
-                # 3. جلسه موقت را با استفاده از UUID پیدا و منتقل می‌کنیم
-                temp_session = game_sessions.pop(temp_uuid, None)
+                # 3. جلسه موقت را با استفاده از temp_uuid_game_session پیدا و منتقل می‌کنیم
+                temp_session = game_sessions.pop(temp_uuid_game_session, None)
                 if temp_session:
                     temp_session["main_message_id"] = current_key # inline_message_id واقعی را ذخیره می‌کنیم
                     game_sessions[current_key] = temp_session
                     session = game_sessions[current_key]
-                    logger.info(f"CALLBACK: Transferred session from temporary key '{temp_uuid}' to '{current_key}'.")
+                    logger.info(f"CALLBACK: Transferred session from temporary key '{temp_uuid_game_session}' to '{current_key}'.")
                 else:
-                    logger.warning(f"CALLBACK: Temporary session for UUID '{temp_uuid}' not found. Might be an old or expired session.")
+                    logger.warning(f"CALLBACK: Temporary session '{temp_uuid_game_session}' not found for transfer. Might be an old or expired session.")
             else:
-                logger.warning(f"CALLBACK: No temporary UUID found in inline message text for '{current_key}'.")
+                logger.warning(f"CALLBACK: No temporary game session UUID found in map for callback_query.id '{callback_query.id}'.")
 
         # اگر session همچنان None بود، یعنی نه با inline_message_id پیدا شد و نه از UUID موقت منتقل شد
         if not session:
             logger.warning(f"CALLBACK: No existing session found for inline message ID '{current_key}'. This might be an old message. Answering with expiry message.")
             await callback_query.answer("این بازی منقضی شده یا قبلاً بسته شده است. لطفا یک بازی جدید شروع کنید.", show_alert=True)
             try:
+                # برای پیام های اینلاین، message خود object نیست، فقط message_id هست.
+                # بنابراین نیازی به callback_query.message.text نیست.
+                # اینجا فقط پیام رو ویرایش می‌کنیم.
                 await client.edit_inline_message_text(
                     inline_message_id=current_key,
                     text="این بازی منقضی شده است. لطفا یک بازی جدید شروع کنید.",
                     reply_markup=None
                 )
             except Exception as e:
-                logger.error(f"CALLBACK_ERROR: Could not edit expired inline message for '{current_key}'. Error: {str(e)}")
+                logger.error(f"CALLBACK_ERROR: Could not edit expired inline message for '{current_key}'. Error: {str(e)}", exc_info=True)
             return # از تابع خارج می‌شویم
 
     else:
@@ -212,7 +222,7 @@ async def handle_buttons(client, callback_query):
                     reply_markup=None
                 )
             except Exception as e:
-                logger.error(f"CALLBACK_ERROR: Could not edit expired private message for '{current_key}'. Error: {str(e)}")
+                logger.error(f"CALLBACK_ERROR: Could not edit expired private message for '{current_key}'. Error: {str(e)}", exc_info=True)
             return # از تابع خارج می‌شویم
 
     # اگر برای یک پیام خصوصی، main_message_id هنوز تنظیم نشده، آن را تنظیم کن
@@ -245,9 +255,7 @@ async def handle_buttons(client, callback_query):
             logger.info(f"CALLBACK: User {user.id} already in session {current_key}.")
 
         text_to_update = "🎉 به چالش اطلاعات خوش آمدید!\nبرای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\n\n" + get_players_text(session)
-        # فقط در صورتی که این یک پیام اینلاین است، UUID موقت را دوباره اضافه کنید
-        if session["is_inline_message"] and session.get("temp_uuid"):
-            text_to_update += f"\n"
+        # دیگر نیازی به افزودن UUID به متن نیست زیرا از روش دیگری برای شناسایی session استفاده می‌کنیم.
 
         markup = get_initial_markup(session)
         logger.info(f"CALLBACK: Attempting to update message for session '{current_key}' with text: {text_to_update[:100]}... and {len(session['players'])} players")
@@ -289,8 +297,6 @@ async def handle_buttons(client, callback_query):
         logger.info(f"Game started for session {current_key} by user {user.id}")
 
         text_to_update = "🚀 بازی شروع شد! سوالات به صورت خصوصی برایتان ارسال می‌شود..."
-        if session["is_inline_message"] and session.get("temp_uuid"):
-            text_to_update += f"\n"
 
         try:
             if session["is_inline_message"]:
@@ -323,8 +329,6 @@ async def handle_buttons(client, callback_query):
             return await callback_query.answer("فقط شروع‌کننده بازی می‌تواند آن را لغو کند!", show_alert=True)
 
         text_to_update = "❌ بازی توسط شروع‌کننده لغو شد."
-        if session["is_inline_message"] and session.get("temp_uuid"):
-            text_to_update += f"\n"
 
         try:
             if session["is_inline_message"]:
@@ -391,11 +395,6 @@ async def send_question(user_id, session_key):
             final_text = "🏆 نتایج نهایی چالش 🏆\n\n"
             for i, p in enumerate(sorted_players):
                 final_text += f"{'🥇' if i == 0 else '🥈' if i == 1 else '🥉' if i == 2 else '▫️'} {p['name']}: {p['score']} امتیاز\n"
-
-            # اضافه کردن UUID موقت به متن نهایی اگر پیام اینلاین باشد
-            if session["is_inline_message"] and session.get("temp_uuid"):
-                final_text += f"\n"
-
 
             try:
                 # استفاده از is_inline_message برای تعیین نوع ویرایش
@@ -476,7 +475,10 @@ async def handle_answer(client, callback_query, session_key):
     if session_key not in game_sessions:
         logger.warning(f"HANDLE_ANSWER: Session {session_key} not found for user {callback_query.from_user.id}. Message {callback_query.message.id} is outdated.")
         try:
-            await callback_query.message.edit_text("این بازی منقضی شده یا قبلاً بسته شده است. لطفا یک بازی جدید شروع کنید.", reply_markup=None)
+            # برای پیام‌های خصوصی، message.id و edit_text استفاده می‌شود
+            # برای پیام‌های اینلاین، این بخش اجرا نمی‌شود چون message.id ندارد
+            if callback_query.message: # اگر message آبجکت وجود دارد (یعنی پیام خصوصی است)
+                await callback_query.message.edit_text("این بازی منقضی شده یا قبلاً بسته شده است. لطفا یک بازی جدید شروع کنید.", reply_markup=None)
         except Exception as e:
             logger.error(f"HANDLE_ANSWER: Error editing expired message {callback_query.message.id} for {callback_query.from_user.id}: {e}", exc_info=True)
         return await callback_query.answer("این بازی منقضی شده یا قبلاً بسته شده است!", show_alert=True)
