@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # راه‌اندازی ربات
 API_ID = '3335796'
 API_HASH = '138b992a0e672e8346d8439c3f42ea78'
-BOT_TOKEN = '7136875110:AAGr1EREy_qPMgxVbuE4B0cHGVcwWudOrus' # توکن ربات خود را اینجا قرار دهید
+BOT_TOKEN = '713685110:AAGr1EREy_qPMgxVbuE4B0cHGVcwWudOrus' # توکن ربات خود را اینجا قرار دهید
 
 app = Client("watermark_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -137,7 +137,7 @@ async def handle_inline_query(client, inline_query):
             title="دعوت به چالش!",
             input_message_content=InputTextMessageContent(initial_message_text),
             reply_markup=markup,
-            description="دوستانت رو به چالش دعوت کن!"
+            description="دوستانت رو به چallenge دعوت کن!"
         )
     ]
     await inline_query.answer(results, cache_time=1)
