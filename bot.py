@@ -211,7 +211,7 @@ async def handle_buttons(client, callback_query):
     elif data.startswith("answer|"):
         await handle_answer(client, callback_query, key)
 
-def calculate_score(elrelated0:
+def calculate_score(elapsed):
     if elapsed <= 2: return 20
     elif elapsed <= 4: return 15
     elif elapsed <= 6: return 10
