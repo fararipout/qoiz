@@ -76,7 +76,7 @@ async def start_command_private(client, message):
 @app.on_inline_query()
 async def handle_inline_query(client, inline_query):
     query = inline_query.query
- अगर query != "invite":
+ if query != "invite":
         return
 
     session_key = str(uuid.uuid4())
