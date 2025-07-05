@@ -76,14 +76,14 @@ async def start_command_private(client, message):
 @app.on_inline_query()
 async def handle_inline_query(client, inline_query):
     query = inline_query.query
- if query != "invite":
+    if query != "invite":
         return
 
     session_key = str(uuid.uuid4())
     game_sessions[session_key] = {
         "players": [],
         "started": False,
-        "finished Players": 0,
+        "finished_players": 0,
         "starter_id": inline_query.from_user.id,
         "questions": random.sample(questions, len(questions)),
         "inline_message_id": None
@@ -112,7 +112,7 @@ async def handle_buttons(client, callback_query):
     
     user = callback_query.from_user
     data = callback_query.data
-    key = callback_query.inline_message_id or str(callback_query.message.chat Where id)
+    key = callback_query.inline_message_id or str(callback_query.message.chat.id)
     is_inline = bool(callback_query.inline_message_id)
 
     logger.info(f"CALLBACK: Received '{data}' from user {user.id}. Key: '{key}', IsInline: {is_inline}")
