@@ -60,7 +60,7 @@ async def start_command_private(client, message):
         "finished_players": 0,
         "starter_id": message.from_user.id,
         "questions": random.sample(questions, len(questions)),
-        "inline_message_id": None  # برای ذخیره آیدی پیام اینلاین
+        "inline_message_id": None
     }
     
     logger.info(f"PRIVATE_START: Session created for key '{key}'")
@@ -79,7 +79,7 @@ async def handle_inline_query(client, inline_query):
     if query != "invite":
         return
 
-    session_key = str(uuid.uuid4())  # ایجاد یک کلید منحصربه‌فرد برای جلسه اینلاین
+    session_key = str(uuid.uuid4())
     game_sessions[session_key] = {
         "players": [],
         "started": False,
@@ -117,7 +117,6 @@ async def handle_buttons(client, callback_query):
 
     logger.info(f"CALLBACK: Received '{data}' from user {user.id}. Key: '{key}', IsInline: {is_inline}")
 
-    # بررسی وجود جلسه
     if key not in game_sessions:
         logger.warning(f"CALLBACK: No session for key '{key}'. Creating new one.")
         game_sessions[key] = {
@@ -130,8 +129,9 @@ async def handle_buttons(client, callback_query):
         }
 
     session = game_sessions[key]
+    if is_inline and not session["inline_message_id"]:
+        session["inline_message_id"] = key  # ذخیره آیدی پیام اینلاین
 
-    # --- مدیریت دکمه "من پایه‌ام" ---
     if data == "im_in":
         if session["started"]:
             return await callback_query.answer("🚫 بازی شروع شده و نمی‌توانید اضافه شوید!", show_alert=True)
@@ -146,17 +146,16 @@ async def handle_buttons(client, callback_query):
                 "start_time": 0
             })
             await callback_query.answer("✅ شما به لیست پایه‌ها اضافه شدید!", show_alert=False)
-            logger.info(f"CALLBACK: User {user.id} added to session {key}. Players: {len(session['players'])}")
+            logger.info(f"CALLBACK: User {user.id} ({player_name}) added to session {key}. Players: {len(session['players'])}")
         else:
             await callback_query.answer("شما از قبل در لیست هستید!", show_alert=False)
             logger.info(f"CALLBACK: User {user.id} already in session {key}.")
         
-        # آپدیت پیام
         text = "🎉 به چالش اطلاعات خوش آمدید!\nبرای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\n\n" + get_players_text(session)
         markup = get_initial_markup(session)
         try:
             if is_inline:
-                await client.edit_message_text(inline_message_id=key, text=text, reply_markup=markup)
+                await client.edit_inline_message_text(inline_message_id=key, text=text, reply_markup=markup)
             else:
                 await callback_query.message.edit_text(text, reply_markup=markup)
             logger.info(f"CALLBACK: Message updated successfully for key '{key}'.")
@@ -167,7 +166,6 @@ async def handle_buttons(client, callback_query):
                 show_alert=True
             )
 
-    # --- مدیریت دکمه "شروع بازی" ---
     elif data == "start_game":
         if session["started"]:
             return await callback_query.answer("بازی قبلاً شروع شده!", show_alert=True)
@@ -182,7 +180,7 @@ async def handle_buttons(client, callback_query):
         text = "🚀 بازی شروع شد! سوالات به صورت خصوصی برایتان ارسال می‌شود..."
         try:
             if is_inline:
-                await client.edit_message_text(inline_message_id=key, text=text, reply_markup=None)
+                await client.edit_inline_message_text(inline_message_id=key, text=text, reply_markup=None)
             else:
                 await callback_query.message.edit_text(text, reply_markup=None)
         except Exception as e:
@@ -191,7 +189,6 @@ async def handle_buttons(client, callback_query):
         for player in session["players"]:
             asyncio.create_task(send_question(player["id"], key))
 
-    # --- مدیریت دکمه "لغو بازی" ---
     elif data == "cancel_game":
         if user.id != session.get("starter_id"):
             return await callback_query.answer("فقط شروع‌کننده بازی می‌تواند آن را لغو کند!", show_alert=True)
@@ -201,13 +198,12 @@ async def handle_buttons(client, callback_query):
         text = "❌ بازی توسط شروع‌کننده لغو شد."
         try:
             if is_inline:
-                await client.edit_message_text(inline_message_id=key, text=text, reply_markup=None)
+                await client.edit_inline_message_text(inline_message_id=key, text=text, reply_markup=None)
             else:
                 await callback_query.message.edit_text(text, reply_markup=None)
         except Exception as e:
             logger.error(f"Error editing message on game cancel for session {key}: {e}")
 
-    # --- مدیریت پاسخ به سوالات ---
     elif data.startswith("answer|"):
         await handle_answer(client, callback_query, key)
 
@@ -244,7 +240,7 @@ async def send_question(user_id, session_key):
 
             try:
                 if not session_key.isdigit():
-                    await app.edit_message_text(inline_message_id=session_key, text=final_text)
+                    await app.edit_inline_message_text(inline_message_id=session_key, text=final_text)
                 else:
                     await app.send_message(int(session_key), final_text)
             except Exception as e:
