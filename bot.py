@@ -1,3 +1,18 @@
+import pyrogram
+import logging
+# بقیه لاگین رو هم به bot.py اضافه کنید که بهتر بفهمید مشکل کجاست
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("bot.log"), # برای ذخیره لاگ در فایل
+        logging.StreamHandler()        # برای نمایش لاگ در کنسول
+    ]
+)
+logger = logging.getLogger(__name__)
+
+logger.info(f"Pyrogram version: {pyrogram.__version__}")
+
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InlineQueryResultArticle, InputTextMessageContent
 from tes.question import questions
