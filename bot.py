@@ -1,6 +1,7 @@
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InlineQueryResultArticle, InputTextMessageContent
-from tes.question import questions # فرض می‌کنیم فایل tes/question.py شما وجود دارد
+from pyrogram.errors import MessageNotModified
+from tes.question import questions
 import asyncio
 import time
 import uuid
@@ -12,8 +13,8 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("bot.log"), # برای ذخیره لاگ در فایل
-        logging.StreamHandler()         # برای نمایش لاگ در کنسول
+        logging.FileHandler("bot.log"),
+        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
@@ -29,9 +30,8 @@ app = Client("watermark_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TO
 import pyrogram
 logger.info(f"Pyrogram version: {pyrogram.__version__}")
 
-# game_sessions حالا برای پیام‌های اینلاین از inline_message_id واقعی به عنوان کلید استفاده می‌کند.
-# برای پیام‌های خصوصی، از chat_id استفاده می‌شود.
 game_sessions = {}
+active_timeouts = {} # NEW: Dictionary to keep track of timeout tasks
 
 # تابع کمکی برای ایجاد متن لیست بازیکنان
 def get_players_text(session):
@@ -40,6 +40,7 @@ def get_players_text(session):
 
     text = "🧑‍🤝‍🧑 لیست پایه‌ها:\n"
     player_lines = []
+    # MODIFIED: Show scores only if game has started
     for player in session["players"]:
         score_text = f" | امتیاز: {player['score']}" if session["started"] else ""
         player_lines.append(f"👤 {player['name']}{score_text}")
@@ -52,79 +53,65 @@ def get_initial_markup(session, temp_uuid_for_initial_inline=None):
         [InlineKeyboardButton("🙋‍♂️ من پایه‌ام", callback_data="im_in")],
         [InlineKeyboardButton("🚀 شروع بازی", callback_data="start_game")]
     ]
-    # اگر در مرحله اولیه ایجاد پیام اینلاین هستیم و UUID موقت داریم
     if session["is_inline_message"] and not session["started"] and temp_uuid_for_initial_inline:
         buttons[0] = [InlineKeyboardButton("🙋‍♂️ من پایه‌ام", callback_data=f"im_in_inline_initial|{temp_uuid_for_initial_inline}")]
 
     if session["players"] and not session["started"] and session.get("starter_id"):
         buttons.append([InlineKeyboardButton("❌ لغو بازی", callback_data="cancel_game")])
 
-    buttons.append([InlineKeyboardButton("👥 دعوت دوستان", switch_inline_query="invite")])
+    buttons.append([InlineKeyboardButton("👥 دعوت دوستان", switch_inline_query="")]) # MODIFIED: switch_inline_query can be empty
     return InlineKeyboardMarkup(buttons)
 
 # شروع اولیه در چت خصوصی
 @app.on_message(filters.command("start") & filters.private)
 async def start_command_private(client, message):
     chat_id = message.chat.id
-    key = str(chat_id) # در چت خصوصی، chat_id را به عنوان key استفاده می‌کنیم
+    key = str(chat_id)
 
-    # اگر قبلا جلسه‌ای با این chat_id وجود دارد، آن را حذف می‌کنیم تا جلسه جدیدی شروع شود.
     if key in game_sessions:
         del game_sessions[key]
-        logger.info(f"PRIVATE_START: Existing session for key '{key}' deleted for new start.")
 
     session_data = {
         "players": [],
         "started": False,
-        "finished_players": 0,
         "starter_id": message.from_user.id,
         "questions": random.sample(questions, len(questions)),
-        "is_inline_message": False, # مشخص می‌کند که این یک پیام اینلاین نیست
-        "main_message_id": None,    # message_id پیام اصلی در چت خصوصی
-        "main_chat_id": chat_id     # chat_id پیام اصلی در چت خصوصی
+        "is_inline_message": False,
+        "main_message_id": None,
+        "main_chat_id": chat_id,
+        "current_q_index": 0, # NEW: For group quiz
     }
     game_sessions[key] = session_data
-
-    logger.info(f"PRIVATE_START: Session created for key '{key}'. Data: {session_data}")
+    logger.info(f"PRIVATE_START: Session created for key '{key}'.")
 
     text = "🎉 به چالش اطلاعات خوش آمدید!\nبرای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید."
-
     sent_message = await message.reply(
         f"{text}\n\n{get_players_text(session_data)}",
         reply_markup=get_initial_markup(session_data)
     )
-    # ذخیره message_id برای ویرایش‌های بعدی در چت خصوصی
     session_data["main_message_id"] = sent_message.id
     logger.info(f"PRIVATE_START: Message ID {sent_message.id} stored for session '{key}'")
 
 # هندلر برای inline query
 @app.on_inline_query()
 async def handle_inline_query(client, inline_query):
-    query = inline_query.query
-    if query != "invite":
-        return
-
-    # تولید یک UUID موقت برای نگهداری اطلاعات جلسه
     temp_uuid_game_session = str(uuid.uuid4())
 
     session_data = {
         "players": [],
         "started": False,
-        "finished_players": 0,
         "starter_id": inline_query.from_user.id,
         "questions": random.sample(questions, len(questions)),
-        "is_inline_message": True, # مشخص می‌کند که این یک پیام اینلاین است
-        "main_message_id": None,    # این بعداً ست می‌شود (inline_message_id)
-        "main_chat_id": None,       # این برای inline message استفاده نمی‌شود
-        "temp_uuid_game_session": temp_uuid_game_session # ذخیره UUID موقت در session_data
+        "is_inline_message": True,
+        "main_message_id": None, # Will be the inline_message_id
+        "main_chat_id": None,    # Not used for inline
+        "current_q_index": 0, # NEW: For group quiz
+        "temp_uuid_game_session": temp_uuid_game_session
     }
     game_sessions[temp_uuid_game_session] = session_data
-
     logger.info(f"INLINE_QUERY: New temporary game session created with key '{temp_uuid_game_session}'.")
 
-    # استفاده از تابع کمکی جدید برای ساخت markup با UUID موقت
     markup = get_initial_markup(session_data, temp_uuid_game_session)
-
     initial_message_text = (
         "🎉 به چالش اطلاعات خوش آمدید!\n"
         "برای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\n\n"
@@ -133,227 +120,196 @@ async def handle_inline_query(client, inline_query):
 
     results = [
         InlineQueryResultArticle(
-            id=str(uuid.uuid4()), # استفاده از یک UUID جدید برای ID نتیجه کوئری
-            title="دعوت به چالش!",
+            id=str(uuid.uuid4()),
+            title="ایجاد چالش اطلاعات!",
             input_message_content=InputTextMessageContent(initial_message_text),
             reply_markup=markup,
-            description="دوستانت رو به چallenge دعوت کن!"
+            description="دوستان خود را به یک مسابقه هیجان‌انگیز دعوت کنید!"
         )
     ]
     await inline_query.answer(results, cache_time=1)
-    logger.info(f"INLINE_QUERY: Answered for query '{query}' with temp_game_session '{temp_uuid_game_session}'.")
-
 
 # هندل دکمه‌ها
 @app.on_callback_query()
 async def handle_buttons(client, callback_query):
     global game_sessions
-
     user = callback_query.from_user
     data = callback_query.data
-
     current_key = None
     session = None
-    is_inline_message_callback = bool(callback_query.inline_message_id)
+    is_inline = bool(callback_query.inline_message_id)
 
-    if is_inline_message_callback:
+    if is_inline:
         current_key = callback_query.inline_message_id
-        logger.info(f"CALLBACK: Inline message callback received. Message ID: {current_key}")
-
-        # 1. ابتدا سعی می‌کنیم جلسه را با inline_message_id پیدا کنیم (برای کلیک‌های بعدی)
-        session = game_sessions.get(current_key)
-
-        if session:
-            logger.info(f"CALLBACK: Found existing inline session with key '{current_key}'.")
-        else:
-            # 2. اگر پیدا نشد، بررسی می‌کنیم آیا این اولین کلیک روی دکمه "من پایه‌ام" است
-            if data.startswith("im_in_inline_initial|"):
-                temp_uuid_game_session = data.split("|")[1]
-                logger.info(f"CALLBACK: First 'im_in' click for inline message. Found temporary game session UUID '{temp_uuid_game_session}'.")
-
-                # 3. جلسه موقت را پیدا و منتقل می‌کنیم
-                temp_session = game_sessions.pop(temp_uuid_game_session, None)
-                if temp_session:
-                    temp_session["main_message_id"] = current_key # inline_message_id واقعی را ذخیره می‌کنیم
-                    game_sessions[current_key] = temp_session
-                    session = game_sessions[current_key]
-                    logger.info(f"CALLBACK: Transferred session from temporary key '{temp_uuid_game_session}' to '{current_key}'.")
-                    # تغییر callback_data برای دکمه 'im_in' به حالت عمومی
-                    callback_query.data = "im_in" # برای پردازش عادی 'im_in' در ادامه
-                else:
-                    logger.warning(f"CALLBACK: Temporary session '{temp_uuid_game_session}' not found for transfer. Might be an old or expired session.")
-            else:
-                logger.warning(f"CALLBACK: No existing session found for inline message ID '{current_key}' and not an initial 'im_in' click. This might be an old message. Answering with expiry message.")
-
-
-        if not session: # اگر session همچنان None بود، یعنی نه با inline_message_id پیدا شد و نه از UUID موقت منتقل شد
-            logger.warning(f"CALLBACK: No existing session found for inline message ID '{current_key}'. This might be an old message. Answering with expiry message.")
-            await callback_query.answer("این بازی منقضی شده یا قبلاً بسته شده است. لطفا یک بازی جدید شروع کنید.", show_alert=True)
-            try:
-                await app.edit_inline_message_text(
-                    inline_message_id=current_key,
-                    text="این بازی منقضی شده است. لطفا یک بازی جدید شروع کنید.",
-                    reply_markup=None
-                )
-            except Exception as e:
-                logger.error(f"CALLBACK_ERROR: Could not edit expired inline message for '{current_key}'. Error: {str(e)}", exc_info=True)
-            return # از تابع خارج می‌شویم
-
-    else:
-        # برای پیام‌های خصوصی، chat_id کلید است.
-        current_key = str(callback_query.message.chat.id)
-        logger.info(f"CALLBACK: Private message callback received. Chat ID: {current_key}, Message ID: {callback_query.message.id}")
-
         session = game_sessions.get(current_key)
         if not session:
-            logger.warning(f"CALLBACK: No existing session found for private chat ID '{current_key}'. This might be an old message. Answering with expiry message.")
-            await callback_query.answer("این بازی منقضی شده یا قبلاً بسته شده است. لطفا یک بازی جدید شروع کنید.", show_alert=True)
+            if data.startswith("im_in_inline_initial|"):
+                temp_uuid = data.split("|")[1]
+                temp_session = game_sessions.pop(temp_uuid, None)
+                if temp_session:
+                    temp_session["main_message_id"] = current_key
+                    game_sessions[current_key] = temp_session
+                    session = game_sessions[current_key]
+                    logger.info(f"CALLBACK: Transferred session from temp key '{temp_uuid}' to '{current_key}'.")
+                    callback_query.data = "im_in" # Normalize data for next step
+                    data = "im_in"
+                else:
+                    logger.warning(f"CALLBACK: Temp session '{temp_uuid}' not found.")
+            if not session:
+                await callback_query.answer("این بازی منقضی شده است. لطفاً یک بازی جدید شروع کنید.", show_alert=True)
+                return
+    else: # Private/Group message
+        current_key = str(callback_query.message.chat.id)
+        session = game_sessions.get(current_key)
+        if not session:
+            await callback_query.answer("این بازی منقضی شده است. لطفاً یک بازی جدید شروع کنید.", show_alert=True)
             try:
-                await app.edit_message_text(
-                    chat_id=callback_query.message.chat.id, # از callback_query.message.chat.id استفاده کنید
-                    message_id=callback_query.message.id,   # از callback_query.message.id استفاده کنید
-                    text="این بازی منقضی شده است. لطفا یک بازی جدید شروع کنید.",
-                    reply_markup=None
-                )
-            except Exception as e:
-                logger.error(f"CALLBACK_ERROR: Could not edit expired private message for '{current_key}'. Error: {str(e)}", exc_info=True)
-            return # از تابع خارج می‌شویم
+                await callback_query.message.edit_text("این بازی منقضی شده است.")
+            except: pass
+            return
 
-    # اگر برای یک پیام خصوصی، main_message_id هنوز تنظیم نشده، آن را تنظیم کن
-    if not is_inline_message_callback and session["main_message_id"] is None:
-        session["main_message_id"] = callback_query.message.id
-        logger.info(f"CALLBACK: Private message ID {session['main_message_id']} stored for session '{current_key}'.")
-
-    # --- نقطه دیباگ: وضعیت session بعد از شناسایی کلید ---
-    logger.info(f"DEBUG: Session for key '{current_key}' after identification. Players count: {len(session['players'])}, Started: {session['started']}, Is Inline: {session['is_inline_message']}, Main MSG ID: {session['main_message_id']}")
-    # ----------------------------------------------------
-
-
-    if data == "im_in" or data.startswith("im_in_inline_initial|"): # هر دو حالت را پوشش دهد
+    if data == "im_in":
         if session["started"]:
             return await callback_query.answer("🚫 بازی شروع شده و نمی‌توانید اضافه شوید!", show_alert=True)
 
         player_name = user.first_name or user.username or f"User_{user.id}"
         if user.id not in [p["id"] for p in session["players"]]:
-            session["players"].append({
-                "id": user.id,
-                "name": player_name,
-                "score": 0,
-                "current_q": 0,
-                "start_time": 0
-            })
+            session["players"].append({"id": user.id, "name": player_name, "score": 0})
             await callback_query.answer("✅ شما به لیست پایه‌ها اضافه شدید!", show_alert=False)
-            logger.info(f"CALLBACK: User {user.id} ({player_name}) added to session {current_key}. Players: {len(session['players'])}")
+            logger.info(f"CALLBACK: User {user.id} added to session {current_key}.")
         else:
             await callback_query.answer("شما از قبل در لیست هستید!", show_alert=False)
             logger.info(f"CALLBACK: User {user.id} already in session {current_key}.")
 
         text_to_update = "🎉 به چالش اطلاعات خوش آمدید!\nبرای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\n\n" + get_players_text(session)
-        # در اینجا UUID موقت را به get_initial_markup ارسال نمی‌کنیم، زیرا دکمه 'im_in' برای کلیک‌های بعدی باید عمومی باشد.
         markup = get_initial_markup(session)
-        logger.info(f"CALLBACK: Attempting to update message for session '{current_key}' with text: {text_to_update[:100]}... and {len(session['players'])}")
-
         try:
-            if session["is_inline_message"]:
-                await app.edit_inline_message_text(
-                    inline_message_id=session["main_message_id"],
-                    text=text_to_update,
-                    reply_markup=markup
-                )
-                logger.info(f"CALLBACK: Inline message updated successfully for key '{current_key}' using {session['main_message_id']}")
-            else: # Private message
-                await app.edit_message_text(
-                    chat_id=session["main_chat_id"],
-                    message_id=session["main_message_id"],
-                    text=text_to_update,
-                    reply_markup=markup
-                )
-                logger.info(f"CALLBACK: Private message updated successfully for key '{current_key}' (chat:{session['main_chat_id']}, msg:{session['main_message_id']})")
-            await asyncio.sleep(0.1)  # تأخیر کوچک برای اطمینان از آپدیت
+            if is_inline:
+                await app.edit_inline_message_text(session["main_message_id"], text_to_update, reply_markup=markup)
+            else:
+                await app.edit_message_text(session["main_chat_id"], session["main_message_id"], text_to_update, reply_markup=markup)
+        except MessageNotModified:
+            logger.warning(f"Message not modified for session {current_key}, likely no change in content.")
         except Exception as e:
-            logger.error(f"CALLBACK_ERROR: Failed to update message for key '{current_key}'. Error: {str(e)}", exc_info=True)
-            await callback_query.answer(
-                "خطا در بروزرسانی! 😔\n(اگر در گروه هستید، مطمئن شوید ربات ادمین است و مجوز ویرایش پیام را دارد.)",
-                show_alert=True
-            )
+            logger.error(f"CALLBACK_ERROR: Failed to update message for key '{current_key}'. Error: {e}", exc_info=True)
 
     elif data == "start_game":
-        if session["started"]:
-            return await callback_query.answer("بازی قبلاً شروع شده!", show_alert=True)
-        if not session["players"]:
-            return await callback_query.answer("هنوز هیچکس پایه نیست!", show_alert=True)
-        # starter_id را از game_sessions.get استفاده کنید تا اگر starter_id به دلایلی نبود، خطا ندهد.
-        if user.id != session.get("starter_id"):
-            return await callback_query.answer("فقط شروع‌کننده بازی می‌تواند آن را استارت بزند!", show_alert=True)
+        if session["started"]: return await callback_query.answer("بازی قبلاً شروع شده!", show_alert=True)
+        if not session["players"]: return await callback_query.answer("هنوز هیچکس پایه نیست!", show_alert=True)
+        if user.id != session.get("starter_id"): return await callback_query.answer("فقط شروع‌کننده بازی می‌تواند آن را استارت بزند!", show_alert=True)
 
         session["started"] = True
         logger.info(f"Game started for session {current_key} by user {user.id}")
-
-        text_to_update = "🚀 بازی شروع شد! سوالات به صورت خصوصی برایتان ارسال می‌شود..."
-
-        try:
-            if session["is_inline_message"]:
-                await app.edit_inline_message_text(
-                    inline_message_id=session["main_message_id"],
-                    text=text_to_update,
-                    reply_markup=None
-                )
-                logger.info(f"CALLBACK: Inline message updated for game start, key '{current_key}'")
-            else:
-                await app.edit_message_text(
-                    chat_id=session["main_chat_id"],
-                    message_id=session["main_message_id"],
-                    text=text_to_update,
-                    reply_markup=None
-                )
-                logger.info(f"CALLBACK: Private message updated for game start, key '{current_key}'")
-        except Exception as e:
-            logger.error(f"CALLBACK_ERROR: Failed to update message on game start for session {current_key}: {str(e)}", exc_info=True)
-            await callback_query.answer(
-                "خطا در بروزرسانی! 😔\n(اگر در گروه هستید، مطمئن شوید ربات ادمین است و مجوز ویرایش پیام را دارد.)",
-                show_alert=True
-            )
-
-        for player in session["players"]:
-            asyncio.create_task(send_question(player["id"], current_key))
+        await callback_query.answer("🚀 بازی شروع می‌شود!")
+        await ask_question_in_chat(current_key) # MODIFIED: Call the new function
 
     elif data == "cancel_game":
-        if user.id != session.get("starter_id"):
-            return await callback_query.answer("فقط شروع‌کننده بازی می‌تواند آن را لغو کند!", show_alert=True)
+        if user.id != session.get("starter_id"): return await callback_query.answer("فقط شروع‌کننده بازی می‌تواند آن را لغو کند!", show_alert=True)
 
         text_to_update = "❌ بازی توسط شروع‌کننده لغو شد."
-
         try:
-            if session["is_inline_message"]:
-                await app.edit_inline_message_text(
-                    inline_message_id=session["main_message_id"],
-                    text=text_to_update,
-                    reply_markup=None
-                )
-                logger.info(f"CALLBACK: Inline message updated for game cancel, key '{current_key}'")
-            else:
-                await app.edit_message_text(
-                    chat_id=session["main_chat_id"],
-                    message_id=session["main_message_id"],
-                    text=text_to_update,
-                    reply_markup=None
-                )
-                logger.info(f"CALLBACK: Private message updated for game cancel, key '{current_key}'")
-        except Exception as e:
-            logger.error(f"CALLBACK_ERROR: Failed to update message on game cancel for session {current_key}: {str(e)}", exc_info=True)
-            await callback_query.answer(
-                "خطا در بروزرسانی! 😔\n(اگر در گروه هستید، مطمئن شوید ربات ادمین است و مجوز ویرایش پیام را دارد.)",
-                show_alert=True
-            )
-
-        # بعد از به‌روزرسانی پیام، جلسه را حذف می‌کنیم.
-        if current_key in game_sessions:
-            del game_sessions[current_key]
-            logger.info(f"Game session {current_key} cancelled and deleted by user {user.id}")
-
+            if is_inline: await app.edit_inline_message_text(session["main_message_id"], text_to_update, reply_markup=None)
+            else: await app.edit_message_text(session["main_chat_id"], session["main_message_id"], text_to_update, reply_markup=None)
+        except Exception as e: logger.error(f"CALLBACK_ERROR: Failed to update on cancel for session {current_key}: {e}", exc_info=True)
+        
+        if current_key in game_sessions: del game_sessions[current_key]
+        logger.info(f"Game session {current_key} cancelled and deleted.")
 
     elif data.startswith("answer|"):
         await handle_answer(client, callback_query, current_key)
+
+
+# DELETED: Old send_question function is removed.
+
+# NEW FUNCTION: To ask questions in the main chat
+async def ask_question_in_chat(session_key):
+    if session_key not in game_sessions: return
+    session = game_sessions[session_key]
+
+    # If timeout task for this session exists, cancel it
+    if session_key in active_timeouts:
+        active_timeouts[session_key].cancel()
+        del active_timeouts[session_key]
+
+    if session["current_q_index"] >= len(session["questions"]):
+        return await announce_final_results(session_key)
+
+    q = session["questions"][session["current_q_index"]]
+    options_list = q["options"][:]
+    random.shuffle(options_list)
+    buttons = [InlineKeyboardButton(text=opt, callback_data=f"answer|{opt}") for opt in options_list]
+    markup = InlineKeyboardMarkup([buttons[i:i+2] for i in range(0, len(buttons), 2)])
+
+    question_text = (
+        f"سوال {session['current_q_index'] + 1} از {len(session['questions'])}\n\n"
+        f"❓ **{q['question']}**\n\n"
+        f"۱۰ ثانیه فرصت پاسخگویی دارید..."
+    )
+
+    try:
+        if session["is_inline_message"]:
+            await app.edit_inline_message_text(session["main_message_id"], question_text, reply_markup=markup)
+        else:
+            await app.edit_message_text(session["main_chat_id"], session["main_message_id"], question_text, reply_markup=markup)
+        
+        session["question_start_time"] = time.time()
+        session["active_question"] = True # Mark question as active
+
+        # Start timeout task
+        timeout_task = asyncio.create_task(question_timeout(session_key))
+        active_timeouts[session_key] = timeout_task
+
+    except Exception as e:
+        logger.error(f"ASK_QUESTION_ERROR: Could not send/edit question for session {session_key}: {e}", exc_info=True)
+
+# NEW FUNCTION: To handle question timeout
+async def question_timeout(session_key):
+    await asyncio.sleep(10)
+    if session_key not in game_sessions: return
+    session = game_sessions[session_key]
+    
+    if session.get("active_question"): # Check if question is still active
+        session["active_question"] = False
+        logger.info(f"Timeout for question in session {session_key}")
+        
+        timeout_text = f"⏰ زمان پاسخ به سوال تمام شد!\n\nآماده برای سوال بعدی..."
+        try:
+            if session["is_inline_message"]:
+                await app.edit_inline_message_text(session["main_message_id"], timeout_text, reply_markup=None)
+            else:
+                await app.edit_message_text(session["main_chat_id"], session["main_message_id"], timeout_text, reply_markup=None)
+        except Exception as e:
+            logger.error(f"TIMEOUT_EDIT_ERROR: {e}")
+
+        session["current_q_index"] += 1
+        await asyncio.sleep(2)
+        await ask_question_in_chat(session_key)
+
+# NEW FUNCTION: To announce final results in the main chat
+async def announce_final_results(session_key):
+    if session_key not in game_sessions: return
+    session = game_sessions[session_key]
+
+    sorted_players = sorted(session["players"], key=lambda p: p['score'], reverse=True)
+    final_text = "🏆 نتایج نهایی چالش 🏆\n\n"
+    for i, p in enumerate(sorted_players):
+        final_text += f"{'🥇' if i == 0 else '🥈' if i == 1 else '🥉' if i == 2 else '▫️'} {p['name']}: {p['score']} امتیاز\n"
+    final_text += "\nبازی تمام شد! برای شروع یک بازی جدید از دستور /start یا @ ربات استفاده کنید."
+
+    try:
+        if session["is_inline_message"]:
+            await app.edit_inline_message_text(session["main_message_id"], final_text, reply_markup=None)
+        else:
+            await app.edit_message_text(session["main_chat_id"], session["main_message_id"], final_text, reply_markup=None)
+        logger.info(f"Final results announced for session {session_key}")
+    except Exception as e:
+        logger.error(f"ANNOUNCE_RESULTS_ERROR: {e}", exc_info=True)
+    
+    # Clean up
+    if session_key in game_sessions: del game_sessions[session_key]
+    if session_key in active_timeouts:
+        active_timeouts[session_key].cancel()
+        del active_timeouts[session_key]
 
 def calculate_score(elapsed):
     if elapsed <= 2: return 20
@@ -362,161 +318,50 @@ def calculate_score(elapsed):
     elif elapsed <= 8: return 5
     else: return 2
 
-async def send_question(user_id, session_key):
-    # همیشه قبل از دسترسی، از وجود session_key در game_sessions اطمینان حاصل کنید.
-    if session_key not in game_sessions:
-        logger.warning(f"SEND_QUESTION: Session {session_key} not found. Can't send question to {user_id}.")
-        return
-
-    session = game_sessions[session_key]
-    player = next((p for p in session["players"] if p["id"] == user_id), None)
-
-    if not player:
-        logger.warning(f"SEND_QUESTION: Player {user_id} not found in session {session_key}.")
-        return
-
-    if player["current_q"] >= len(session["questions"]):
-        session["finished_players"] += 1
-        await app.send_message(user_id, f"✅ چالش شما تمام شد!\nامتیاز نهایی شما: {player['score']}")
-        logger.info(f"Player {user_id} finished the quiz for session {session_key}")
-
-        if session["finished_players"] == len(session["players"]):
-            logger.info(f"All players finished for session {session_key}. Announcing results.")
-
-            sorted_players = sorted(session["players"], key=lambda p: p['score'], reverse=True)
-
-            final_text = "🏆 نتایج نهایی چالش 🏆\n\n"
-            for i, p in enumerate(sorted_players):
-                final_text += f"{'🥇' if i == 0 else '🥈' if i == 1 else '🥉' if i == 2 else '▫️'} {p['name']}: {p['score']} امتیاز\n"
-
-            try:
-                if session["is_inline_message"]:
-                    await app.edit_inline_message_text(
-                        inline_message_id=session["main_message_id"],
-                        text=final_text,
-                        reply_markup=None # نتایج نهایی دکمه‌ای ندارد
-                    )
-                    logger.info(f"Final results announced for inline session {session_key}")
-                else: # Private message
-                    await app.edit_message_text(
-                        chat_id=session["main_chat_id"],
-                        message_id=session["main_message_id"],
-                        text=final_text,
-                        reply_markup=None # نتایج نهایی دکمه‌ای ندارد
-                    )
-                    logger.info(f"Final results announced for private session {session_key}")
-            except Exception as e:
-                logger.error(f"CALLBACK_ERROR: Failed to announce final results for session {session_key}: {str(e)}", exc_info=True)
-
-            # پاک کردن جلسه بعد از پایان بازی
-            if session_key in game_sessions:
-                del game_sessions[session_key]
-                logger.info(f"Game session {session_key} deleted after announcing results.")
-        return
-
-    q = session["questions"][player["current_q"]]
-
-    options_list = q["options"][:]
-    random.shuffle(options_list)
-
-    buttons = [InlineKeyboardButton(text=opt, callback_data=f"answer|{opt}") for opt in options_list]
-    markup = InlineKeyboardMarkup([buttons[i:i+2] for i in range(0, len(buttons), 2)])
-
-    msg = await app.send_message(
-        user_id,
-        f"سوال {player['current_q'] + 1}:\n\n❓ **{q['question']}**",
-        reply_markup=markup
-    )
-
-    player["start_time"] = time.time()
-    player["question_msg_id"] = msg.id
-
-    async def timeout_task():
-        await asyncio.sleep(10)
-        # دوباره session و player را چک می‌کنیم چون ممکن است در 10 ثانیه تغییر کرده باشند
-        if session_key in game_sessions:
-            current_session_state = game_sessions.get(session_key)
-            if not current_session_state:
-                logger.warning(f"Timeout task: Session {session_key} no longer exists during timeout.")
-                return
-
-            current_player_state = next((p for p in current_session_state["players"] if p["id"] == user_id), None)
-            if not current_player_state:
-                logger.warning(f"Timeout task: Player {user_id} not found in session {session_key} during timeout.")
-                return
-
-            # فقط در صورتی که پیام سوال هنوز معتبر باشد و کاربر هنوز پاسخ نداده باشد
-            # و همچنین مطمئن می‌شویم که این همان سوالی است که انتظار پاسخ آن را داریم.
-            if current_player_state.get("question_msg_id") == msg.id:
-                try:
-                    await msg.edit_text("⏰ زمان تمام شد! امتیاز این سوال را از دست دادی.")
-                except Exception as e:
-                    logger.warning(f"Timeout task: Failed to edit message {msg.id} for user {user_id}: {str(e)}. Likely already edited or deleted.")
-
-                # فقط در صورتی که بازیکن هنوز به این سوال پاسخ نداده باشد، امتیاز را صفر می‌کنیم و به سوال بعدی می‌رویم
-                current_player_state["current_q"] += 1
-                current_player_state["question_msg_id"] = None # علامت‌گذاری که به این سوال پاسخ داده شده (یا زمانش تمام شده)
-                logger.info(f"Timeout for user {user_id} on question {current_q_index} in session {session_key}. Moving to next.")
-                await send_question(user_id, session_key)
-            else:
-                logger.info(f"Timeout task: User {user_id} already answered question {current_q_index} or moved on.")
-
-    current_q_index = player["current_q"]
-    asyncio.create_task(timeout_task())
-
+# MODIFIED: handle_answer function is rewritten for group play
 async def handle_answer(client, callback_query, session_key):
     if session_key not in game_sessions:
-        logger.warning(f"HANDLE_ANSWER: Session {session_key} not found for user {callback_query.from_user.id}. Message {callback_query.message.id} is outdated.")
-        try:
-            # برای پیام‌های خصوصی، message.id و edit_text استفاده می‌شود
-            # برای پیام‌های اینلاین، این بخش اجرا نمی‌شود چون message آبجکت ندارد.
-            if callback_query.message: # اگر message آبجکت وجود دارد (یعنی پیام خصوصی است)
-                await callback_query.message.edit_text("این بازی منقضی شده یا قبلاً بسته شده است. لطفا یک بازی جدید شروع کنید.", reply_markup=None)
-        except Exception as e:
-            logger.error(f"HANDLE_ANSWER: Error editing expired message {callback_query.message.id} for {callback_query.from_user.id}: {e}", exc_info=True)
-        return await callback_query.answer("این بازی منقضی شده یا قبلاً بسته شده است!", show_alert=True)
-
+        return await callback_query.answer("این بازی منقضی شده است!", show_alert=True)
+    
     session = game_sessions[session_key]
-    user_id = callback_query.from_user.id
-    player = next((p for p in session["players"] if p["id"] == user_id), None)
+    user = callback_query.from_user
 
+    player = next((p for p in session["players"] if p["id"] == user.id), None)
     if not player:
-        logger.warning(f"HANDLE_ANSWER: Player {user_id} not found in session {session_key}.")
         return await callback_query.answer("شما در این بازی شرکت نکرده‌اید!", show_alert=True)
 
-    # بررسی اینکه آیا این همان پیام سوالی است که انتظار پاسخ آن را داریم
-    # و همچنین مطمئن می‌شویم که user["question_msg_id"] هنوز تنظیم شده است (یعنی قبلا پاسخ داده نشده).
-    if player.get("question_msg_id") is None or callback_query.message.id != player["question_msg_id"]:
-        logger.warning(f"HANDLE_ANSWER: User {user_id} answered an old/invalid question (msg_id: {callback_query.message.id}, expected: {player.get('question_msg_id')}).")
-        await callback_query.answer("این سوال برای شما نیست یا قبلاً پاسخ داده‌اید!", show_alert=True)
-        # تلاش برای حذف یا ویرایش پیام قدیمی
-        try:
-            await callback_query.message.edit_text("این سوال دیگر معتبر نیست.", reply_markup=None)
-        except Exception as e:
-            logger.error(f"HANDLE_ANSWER: Error editing old question message {callback_query.message.id}: {e}", exc_info=True)
-        return
+    if not session.get("active_question"):
+        return await callback_query.answer("این سوال دیگر فعال نیست!", show_alert=True)
+
+    # Deactivate question immediately to prevent multiple answers
+    session["active_question"] = False
+    if session_key in active_timeouts:
+        active_timeouts[session_key].cancel()
+        del active_timeouts[session_key]
 
     selected = callback_query.data.split("|")[1]
-    q = session["questions"][player["current_q"]]
+    q = session["questions"][session["current_q_index"]]
     correct_answer = q["answer"]
-
-    elapsed = time.time() - player["start_time"]
-
-    # علامت‌گذاری که به این سوال پاسخ داده شده، تا timeout آن را دوباره پردازش نکند
-    player["question_msg_id"] = None
-
+    elapsed = time.time() - session["question_start_time"]
+    
     if selected == correct_answer:
         earned_score = calculate_score(elapsed)
         player["score"] += earned_score
-        text = f"✅ پاسخ صحیح!\n\n**+{earned_score}** امتیاز ({elapsed:.1f} ثانیه)\nامتیاز کل: {player['score']}"
+        text = f"✅ آفرین {player['name']}! پاسخ صحیح بود.\n\n**+{earned_score}** امتیاز ({elapsed:.1f} ثانیه)\n\nآماده برای سوال بعدی..."
     else:
-        text = f"❌ پاسخ اشتباه!\n\nجواب صحیح: **{correct_answer}**\nامتیاز کل: {player['score']}"
+        text = f"❌ افسوس {player['name']}! پاسخ شما اشتباه بود.\n\nجواب صحیح: **{correct_answer}**\n\nآماده برای سوال بعدی..."
 
-    player["current_q"] += 1
-    await callback_query.message.edit_text(text)
+    try:
+        if session["is_inline_message"]:
+            await app.edit_inline_message_text(session["main_message_id"], text, reply_markup=None)
+        else:
+            await app.edit_message_text(session["main_chat_id"], session["main_message_id"], text, reply_markup=None)
+    except Exception as e:
+        logger.error(f"HANDLE_ANSWER_EDIT_ERROR: {e}")
 
-    await asyncio.sleep(2) # تأخیر قبل از ارسال سوال بعدی
-    await send_question(user_id, session_key)
+    session["current_q_index"] += 1
+    await asyncio.sleep(3) # Delay before next question
+    await ask_question_in_chat(session_key)
 
 print("Bot is running...")
 app.run()
