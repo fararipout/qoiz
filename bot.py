@@ -34,6 +34,20 @@ game_sessions = {}
 active_timeouts = {}
 active_updaters = {}
 
+# تابع پاک‌سازی جلسات قدیمی
+async def cleanup_old_sessions():
+    while True:
+        await asyncio.sleep(600)  # هر 10 دقیقه
+        expired_keys = [key for key, session in game_sessions.items() if time.time() - session.get("created_at", time.time()) > 600]
+        for key in expired_keys:
+            logger.info(f"Cleaning up expired session {key}")
+            if key in game_sessions:
+                del game_sessions[key]
+            if key in active_updaters:
+                active_updaters[key].cancel()
+            if key in active_timeouts:
+                active_timeouts[key].cancel()
+
 # تابع کمکی برای ایجاد متن لیست بازیکنان
 def get_players_text(session):
     if not session["players"]:
@@ -104,11 +118,13 @@ async def start_command_private(client, message):
 
     if key in game_sessions:
         del game_sessions[key]
+        logger.info(f"PRIVATE_START: Old session for key '{key}' deleted.")
 
     session_data = {
         "players": [], "started": False, "starter_id": message.from_user.id,
         "questions": random.sample(questions, len(questions)), "is_inline_message": False,
         "main_message_id": None, "main_chat_id": chat_id, "current_q_index": 0,
+        "created_at": time.time()
     }
     game_sessions[key] = session_data
     logger.info(f"PRIVATE_START: Session created for key '{key}'.")
@@ -119,6 +135,7 @@ async def start_command_private(client, message):
         reply_markup=get_initial_markup(session_data)
     )
     session_data["main_message_id"] = sent_message.id
+    logger.info(f"PRIVATE_START: Main message ID set to {sent_message.id} for key '{key}'.")
 
 # هندلر برای inline query
 @app.on_inline_query()
@@ -128,7 +145,8 @@ async def handle_inline_query(client, inline_query):
         "players": [], "started": False, "starter_id": inline_query.from_user.id,
         "questions": random.sample(questions, len(questions)), "is_inline_message": True,
         "main_message_id": None, "main_chat_id": None, "current_q_index": 0,
-        "temp_uuid_game_session": temp_uuid_game_session
+        "temp_uuid_game_session": temp_uuid_game_session,
+        "created_at": time.time()
     }
     game_sessions[temp_uuid_game_session] = session_data
     logger.info(f"INLINE_QUERY: New temp session created with key '{temp_uuid_game_session}'.")
@@ -158,38 +176,51 @@ async def handle_buttons(client, callback_query):
     session = None
     is_inline = bool(callback_query.inline_message_id)
 
-    # --- Session finding logic (unchanged) ---
+    logger.info(f"CALLBACK: Received callback from user {user.id} with data '{data}', is_inline={is_inline}")
+
+    # --- Session finding logic ---
     if is_inline:
         current_key = callback_query.inline_message_id
         session = game_sessions.get(current_key)
         if not session:
+            logger.warning(f"CALLBACK: No session found for inline_message_id '{current_key}'")
             if data.startswith("im_in_inline_initial|"):
                 temp_uuid = data.split("|")[1]
-                temp_session = game_sessions.pop(temp_uuid, None)
+                logger.info(f"CALLBACK: Attempting to transfer session from temp_uuid '{temp_uuid}'")
+                temp_session = game_sessions.get(temp_uuid)
                 if temp_session:
                     temp_session["main_message_id"] = current_key
                     game_sessions[current_key] = temp_session
+                    del game_sessions[temp_uuid]
+                    session = game_sessions[current_key]
                     logger.info(f"CALLBACK: Transferred session from temp key '{temp_uuid}' to '{current_key}'.")
                     callback_query.data = "im_in"
                     data = "im_in"
-            if not session:
-                await callback_query.answer("این بازی منقضی شده است.", show_alert=True)
+                else:
+                    logger.error(f"CALLBACK: Temp session '{temp_uuid}' not found")
+                    await callback_query.answer("این بازی منقضی شده است. لطفاً یک بازی جدید شروع کنید.", show_alert=True)
+                    return
+            else:
+                logger.error(f"CALLBACK: No session or temp session found for inline_message_id '{current_key}'")
+                await callback_query.answer("این بازی منقضی شده است. لطفاً یک بازی جدید شروع کنید.", show_alert=True)
                 return
     else:
         current_key = str(callback_query.message.chat.id)
         session = game_sessions.get(current_key)
         if not session:
-            await callback_query.answer("این بازی منقضی شده است.", show_alert=True)
+            logger.error(f"CALLBACK: No session found for chat_id '{current_key}'")
+            await callback_query.answer("این بازی منقضی شده است. لطفاً یک بازی جدید شروع کنید.", show_alert=True)
             try:
                 await callback_query.message.edit_text("این بازی منقضی شده است.")
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"CALLBACK: Failed to edit message: {e}")
             return
 
     # --- Callback data handling ---
     if data == "im_in":
         if session["started"]:
-            return await callback_query.answer("🚫 بازی شروع شده!", show_alert=True)
+            await callback_query.answer("🚫 بازی شروع شده!", show_alert=True)
+            return
 
         player_name = user.first_name or user.username or f"User_{user.id}"
         if user.id not in [p["id"] for p in session["players"]]:
@@ -265,6 +296,7 @@ async def handle_buttons(client, callback_query):
         
         if current_key in game_sessions:
             del game_sessions[current_key]
+            logger.info(f"CALLBACK: Session {current_key} deleted due to cancellation")
 
     elif data.startswith("answer|"):
         await handle_answer(client, callback_query, current_key)
@@ -272,6 +304,7 @@ async def handle_buttons(client, callback_query):
 # توابع بازی
 async def ask_question_in_chat(client, session_key):
     if session_key not in game_sessions:
+        logger.error(f"ASK_QUESTION: Session {session_key} not found")
         return
     session = game_sessions[session_key]
 
@@ -320,6 +353,7 @@ async def ask_question_in_chat(client, session_key):
 async def question_timeout(client, session_key):
     await asyncio.sleep(10)
     if session_key not in game_sessions:
+        logger.error(f"TIMEOUT: Session {session_key} not found")
         return
     session = game_sessions[session_key]
     
@@ -349,6 +383,7 @@ async def question_timeout(client, session_key):
 
 async def announce_final_results(client, session_key):
     if session_key not in game_sessions:
+        logger.error(f"ANNOUNCE_RESULTS: Session {session_key} not found")
         return
     session = game_sessions[session_key]
 
@@ -377,6 +412,7 @@ async def announce_final_results(client, session_key):
     
     if session_key in game_sessions:
         del game_sessions[session_key]
+        logger.info(f"ANNOUNCE_RESULTS: Session {session_key} deleted")
     if session_key in active_timeouts:
         active_timeouts[session_key].cancel()
     if session_key in active_updaters:
@@ -396,6 +432,7 @@ def calculate_score(elapsed):
 
 async def handle_answer(client, callback_query, session_key):
     if session_key not in game_sessions:
+        logger.error(f"HANDLE_ANSWER: Session {session_key} not found")
         return
     
     session = game_sessions[session_key]
@@ -448,6 +485,9 @@ async def handle_answer(client, callback_query, session_key):
     session["current_q_index"] += 1
     await asyncio.sleep(3)
     await ask_question_in_chat(client, session_key)
+
+# شروع تسک پاک‌سازی جلسات
+asyncio.create_task(cleanup_old_sessions())
 
 print("Bot is running...")
 app.run()
