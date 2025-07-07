@@ -82,7 +82,6 @@ async def periodic_player_list_updater(client, session_key):
         markup = get_initial_markup(session)
         
         try:
-            # اصلاح: استفاده از متد صحیح edit_inline_message
             await client.edit_inline_message(
                 inline_message_id=session["main_message_id"],
                 text=text_to_update,
@@ -137,8 +136,8 @@ async def handle_inline_query(client, inline_query):
     markup = get_initial_markup(session_data, temp_uuid_game_session)
     initial_message_text = (
         "🎉 به چالش اطلاعات خوش آمدید!\n"
-        "برای شرکت Quân برای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\n\n"
-        fසرگرمی f"{get_players_text(session_data)}"
+        "برای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\n\n"
+        f"{get_players_text(session_data)}"
     )
     results = [
         InlineQueryResultArticle(
@@ -202,7 +201,6 @@ async def handle_buttons(client, callback_query):
             markup = get_initial_markup(session)
             try:
                 if is_inline:
-                    # اصلاح: استفاده از متد صحیح edit_inline_message
                     await client.edit_inline_message(
                         inline_message_id=session["main_message_id"],
                         text=text_to_update,
@@ -298,7 +296,6 @@ async def ask_question_in_chat(client, session_key):
 
     try:
         if session["is_inline_message"]:
-            # اصلاح: استفاده از متد صحیح edit_inline_message
             await client.edit_inline_message(
                 inline_message_id=session["main_message_id"],
                 text=question_text,
