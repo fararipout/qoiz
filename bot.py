@@ -48,12 +48,6 @@ async def cleanup_old_sessions():
             if key in active_timeouts:
                 active_timeouts[key].cancel()
 
-# ثبت تسک پاک‌سازی هنگام شروع ربات
-@app.on_start()
-async def start_cleanup_task():
-    logger.info("Starting cleanup_old_sessions task")
-    asyncio.create_task(cleanup_old_sessions())
-
 # تابع کمکی برای ایجاد متن لیست بازیکنان
 def get_players_text(session):
     if not session["players"]:
@@ -245,7 +239,7 @@ async def handle_buttons(client, callback_query):
                     )
                     if current_key not in active_updaters:
                         logger.info(f"Starting periodic updater for session {current_key}")
-                        task = asyncio.create_task(periodic_player_list_updater(client, current_key))
+                        task = asyncio.create_task(periodic_player_list_updater(client, session_key))
                         active_updaters[current_key] = task
                 else:
                     await client.edit_message_text(
@@ -492,5 +486,16 @@ async def handle_answer(client, callback_query, session_key):
     await asyncio.sleep(3)
     await ask_question_in_chat(client, session_key)
 
-print("Bot is running...")
-app.run()
+# اجرای دستی ربات
+async def main():
+    try:
+        await app.start()
+        logger.info("Bot started successfully")
+        asyncio.create_task(cleanup_old_sessions())
+        await app.idle()  # منتظر نگه داشتن ربات تا دریافت سیگنال توقف
+    finally:
+        await app.stop()
+        logger.info("Bot stopped")
+
+if __name__ == "__main__":
+    asyncio.run(main())
