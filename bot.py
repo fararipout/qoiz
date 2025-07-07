@@ -48,6 +48,12 @@ async def cleanup_old_sessions():
             if key in active_timeouts:
                 active_timeouts[key].cancel()
 
+# ثبت تسک پاک‌سازی هنگام شروع ربات
+@app.on_start()
+async def start_cleanup_task():
+    logger.info("Starting cleanup_old_sessions task")
+    asyncio.create_task(cleanup_old_sessions())
+
 # تابع کمکی برای ایجاد متن لیست بازیکنان
 def get_players_text(session):
     if not session["players"]:
@@ -485,9 +491,6 @@ async def handle_answer(client, callback_query, session_key):
     session["current_q_index"] += 1
     await asyncio.sleep(3)
     await ask_question_in_chat(client, session_key)
-
-# شروع تسک پاک‌سازی جلسات
-asyncio.create_task(cleanup_old_sessions())
 
 print("Bot is running...")
 app.run()
