@@ -10,4 +10,4 @@ COPY . /app
 
 RUN pip install --no-cache-dir telethon 
 
-CMD ["python", "bot.py"]
+CMD ["python", "main.py"]
