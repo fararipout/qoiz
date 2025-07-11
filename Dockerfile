@@ -8,6 +8,6 @@ RUN apt-get update && apt-get install -y \
 
 COPY . /app
 
-RUN pip install --no-cache-dir pyrogram tgcrypto
+RUN pip install --no-cache-dir telethon 
 
 CMD ["python", "bot.py"]
