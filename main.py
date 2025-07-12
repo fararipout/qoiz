@@ -1,11 +1,26 @@
+
 import asyncio
 import time
 import uuid
 import logging
 import random
+import os
+from aiohttp import web  
 from telethon import TelegramClient, events, types
 from telethon.tl.types import InputBotInlineResult, InputBotInlineMessageText
 from tes.question import questions
+
+# ... بعد از import ها ...
+
+# تابع برای پاسخ به Health Check هاستینگ
+async def health_check(request):
+    logger.info("Health check endpoint was called.")
+    # فقط یک پاسخ موفقیت‌آمیز برمی‌گردانیم تا پلتفرم بداند برنامه زنده است
+    return web.Response(text="Bot is running and healthy!")
+
+logger = logging.getLogger(__name__)
+
+# ... بقیه کد شما تا تابع main ...
 
 # تنظیم لاگ دقیق‌تر برای عیب‌یابی
 logging.basicConfig(
@@ -580,25 +595,44 @@ async def handle_answer(client, event, session_key):
         logger.info(f"HANDLE_ANSWER: Continuing despite edit error for session {session_key}")
 
 # اجرای دستی ربات
+# تابع main قبلی را حذف کرده و این را جایگزین کنید
 async def main():
-    async with app:
-        await app.start(bot_token=BOT_TOKEN)
-        logger.info("Bot started successfully")
-        cleanup_task = asyncio.create_task(cleanup_old_sessions())
-        try:
-            await app.run_until_disconnected()
-        except asyncio.CancelledError:
-            logger.info("Received cancellation signal")
-        finally:
-            # لغو تمام وظایف فعال
-            cleanup_task.cancel()
-            for task in active_updaters.values():
-                task.cancel()
-            for task in active_timeouts.values():
-                task.cancel()
-            active_updaters.clear()
-            active_timeouts.clear()
-            logger.info("Bot stopped")
+    # ۱. ربات را استارت بزنید. این در پس‌زمینه اجرا خواهد شد.
+    await app.start(bot_token=BOT_TOKEN)
+    logger.info("Bot client started successfully.")
 
+    # ۲. تسک‌های پس‌زمینه خودتان را اجرا کنید
+    cleanup_task = asyncio.create_task(cleanup_old_sessions())
+    logger.info("Cleanup task scheduled.")
+
+    # ۳. وب‌سرور را برای پاسخ به Health Checks تنظیم و اجرا کنید
+    webapp = web.Application()
+    webapp.router.add_get('/', health_check)  # روت اصلی به تابع health_check وصل می‌شود
+
+    runner = web.AppRunner(webapp)
+    await runner.setup()
+    
+    # پورت را از متغیرهای محیطی هاستینگ (PORT) بخوانید. اگر وجود نداشت، از 8080 استفاده کنید.
+    port = int(os.environ.get('PORT', 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    
+    logger.info(f"Starting web server on port {port} to handle health checks...")
+    await site.start()
+    
+    logger.info("Bot is fully running and waiting for events. Web server is active.")
+    
+    # این خط باعث می‌شود برنامه اصلی تا زمان قطع شدن ربات، فعال بماند
+    await app.run_until_disconnected()
+
+    # ۴. پاکسازی در هنگام خاموش شدن
+    logger.info("Bot disconnected. Cleaning up resources...")
+    cleanup_task.cancel()
+    await runner.cleanup()
+    logger.info("Cleanup complete. Bot stopped.")
+
+# اطمینان حاصل کنید که بخش پایانی کد شما به این شکل است
 if __name__ == "__main__":
-    app.loop.run_until_complete(main())
+    try:
+        app.loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        logger.info("Shutdown requested by user. Exiting.")
