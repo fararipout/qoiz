@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # راه‌اندازی ربات
 API_ID = '3335796'
 API_HASH = '138b992a0e672e8346d8439c3f42ea78'
-BOT_TOKEN = '5002292255:AAGc9Lk0LXX1cjfERx6CnVye0A5EUNvgtzU'
+BOT_TOKEN = '8189638115:AAEYMDvummCXAPgdpavZbYHa3YuXpOzkRBY'
 
 app = TelegramClient("watermark_bot", api_id=API_ID, api_hash=API_HASH)
 
