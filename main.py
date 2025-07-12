@@ -553,13 +553,14 @@ async def handle_answer(client, event, session_key):
     if selected == correct_answer:
         earned_score = calculate_score(elapsed)
         player["score"] += earned_score
-        response_text = "✅ آفرین ! درست گفتی" # Changed message
+        # Changed: Added earned_score to the correct answer message
+        response_text = f"✅ آفرین ! درست گفتی | {earned_score} امتیاز" 
     else:
-        response_text = "❌ اشتباه !" # Changed message
+        response_text = "❌ اشتباه !"
     
     session["responses"].append(response_text)
     session["responded_users"].append(user.id)
-    await event.answer(response_text, alert=True)
+    await event.answer(response_text, alert=False) 
     logger.info(f"HANDLE_ANSWER: User {user.id} answered for session {session_key}, correct={selected == correct_answer}, score={player['score']}, responses={session['responses']}")
 
     # به‌روزرسانی پیام سوال بدون نمایش پاسخ‌ها
