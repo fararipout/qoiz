@@ -79,21 +79,17 @@ def get_players_text(session):
     return text
 
 # تابع کمکی برای ایجاد دکمه‌ها
-# CHANGED: Added is_start_command parameter
 def get_initial_markup(session, temp_uuid_for_initial_inline=None, is_start_command=False):
     rows = []
     
-    # NEW: Only add 'im_in' and 'start_game' buttons if not a /start command
     if not is_start_command:
         rows.append(types.KeyboardButtonRow([types.KeyboardButtonCallback("🙋‍♂️ من پایه‌ام", data=b"im_in")]))
         rows.append(types.KeyboardButtonRow([types.KeyboardButtonCallback("🚀 شروع بازی", data=b"start_game")]))
     
     if session["is_inline_message"] and not session["started"] and temp_uuid_for_initial_inline:
-        # If it's an inline message, ensure 'im_in' button data is correct
         rows[0] = types.KeyboardButtonRow([types.KeyboardButtonCallback("🙋‍♂️ من پایه‌ام", data=f"im_in_inline_initial|{temp_uuid_for_initial_inline}".encode())])
     
     if session["players"] and not session["started"] and session.get("starter_id"):
-        # This button should still appear for game starters
         rows.append(types.KeyboardButtonRow([types.KeyboardButtonCallback("❌ لغو بازی", data=b"cancel_game")]))
     
     rows.append(types.KeyboardButtonRow([types.KeyboardButtonSwitchInline("👥 دعوت دوستان", query="")]))
@@ -116,7 +112,6 @@ async def periodic_player_list_updater(client, session_key):
                 "برای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\n\n"
                 f"{get_players_text(session)}"
             )
-            # CHANGED: Pass is_start_command=False, as this updater is for initial game setup (not /start itself)
             markup = get_initial_markup(session, is_start_command=False) 
             logger.info(f"UPDATER: Attempting to update session {session_key}, is_inline={session['is_inline_message']}, message_id={session.get('main_message_id')}")
             
@@ -165,9 +160,9 @@ async def start_command_private(event):
     # The initial /start message will ONLY have the "Invite Friends" button
     text = "🎉 به چالش اطلاعات خوش آمدید!\nبرای شروع یک بازی جدید، دکمه 'دعوت دوستان' را لمس کنید و بازی را در یک گروه یا چت خصوصی با دوستانتان به اشتراک بگذارید."
     try:
-        # CHANGED: Pass is_start_command=True to get_initial_markup
+        # CHANGED: Removed get_players_text(session_data) from the message
         sent_message = await event.respond(
-            f"{text}\n\n{get_players_text(session_data)}",
+            text, # Changed this line
             buttons=get_initial_markup(session_data, is_start_command=True)
         )
         session_data["main_message_id"] = sent_message.id
@@ -190,7 +185,6 @@ async def handle_inline_query(event):
     game_sessions[temp_uuid_game_session] = session_data
     logger.info(f"INLINE_QUERY: New temp session created with key '{temp_uuid_game_session}'.")
 
-    # CHANGED: Pass is_start_command=False as this is an inline query, not a /start command
     markup = get_initial_markup(session_data, temp_uuid_game_session, is_start_command=False) 
     initial_message_text = (
         "🎉 به چالش اطلاعات خوش آمدید!\n"
@@ -283,7 +277,6 @@ async def handle_buttons(event):
             logger.info(f"CALLBACK: User {user.id} ({player_name}) added to session {current_key}, players: {session['players']}")
 
             text_to_update = "🎉 به چالش اطلاعات خوش آمدید!\nبرای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\n\n" + get_players_text(session)
-            # CHANGED: Pass is_start_command=False, as this is a game-related action, not the initial /start
             markup = get_initial_markup(session, is_start_command=False) 
             try:
                 await event.edit(text=text_to_update, buttons=markup)
