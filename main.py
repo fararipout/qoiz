@@ -30,14 +30,14 @@ logger = logging.getLogger(__name__)
 # راه‌اندازی ربات
 API_ID = '3335796'
 API_HASH = '138b992a0e672e8346d8439c3f42ea78'
-BOT_TOKEN = '8189638115:AAEYMDvummCXAPgdpavZbYHa3YuXpOzkRBY' # NOTE: Changed BOT_TOKEN slightly, ensure it's correct
+BOT_TOKEN = '5002292255:AAGc9Lk0LXX1cjfERx6CnVye0A0EUNvgtzU' # Ensure this token is correct
 
 app = TelegramClient("watermark_bot", api_id=API_ID, api_hash=API_HASH)
 
 game_sessions = {}
 active_timeouts = {} # Stores asyncio tasks for question timeouts (10 seconds)
 active_updaters = {} # Stores asyncio tasks for periodic player list/initial message updates
-active_time_updaters = {} # NEW: Stores asyncio tasks for periodic time updates during questions
+active_time_updaters = {} # Stores asyncio tasks for periodic time updates during questions
 
 # داکیومنت نسخه Telethon هنگام شروع
 import telethon
@@ -63,7 +63,7 @@ async def cleanup_old_sessions():
                 if key in active_timeouts:
                     active_timeouts[key].cancel()
                     del active_timeouts[key]
-                if key in active_time_updaters: # NEW: Clean up time updater tasks
+                if key in active_time_updaters:
                     active_time_updaters[key].cancel()
                     del active_time_updaters[key]
     except asyncio.CancelledError:
@@ -89,11 +89,15 @@ def get_initial_markup(session, temp_uuid_for_initial_inline=None, is_start_comm
     rows = []
     
     if not is_start_command:
-        rows.append(types.KeyboardButtonRow([types.KeyboardButtonCallback("🙋‍♂️ من پایه‌ام", data=b"im_in")]))
+        # If it's an inline message being prepared (has temp_uuid_for_initial_inline),
+        # embed the temp_uuid in the data for the 'im_in' button.
+        # Otherwise, use generic 'im_in'.
+        if session["is_inline_message"] and temp_uuid_for_initial_inline:
+             rows.append(types.KeyboardButtonRow([types.KeyboardButtonCallback("🙋‍♂️ من پایه‌ام", data=f"im_in_initial_inline|{temp_uuid_for_initial_inline}".encode())]))
+        else:
+            rows.append(types.KeyboardButtonRow([types.KeyboardButtonCallback("🙋‍♂️ من پایه‌ام", data=b"im_in")]))
+        
         rows.append(types.KeyboardButtonRow([types.KeyboardButtonCallback("🚀 شروع بازی", data=b"start_game")]))
-    
-    if session["is_inline_message"] and not session["started"] and temp_uuid_for_initial_inline:
-        rows[0] = types.KeyboardButtonRow([types.KeyboardButtonCallback("🙋‍♂️ من پایه‌ام", data=f"im_in_inline_initial|{temp_uuid_for_initial_inline}".encode())])
     
     if session["players"] and not session["started"] and session.get("starter_id"):
         rows.append(types.KeyboardButtonRow([types.KeyboardButtonCallback("❌ لغو بازی", data=b"cancel_game")]))
@@ -143,14 +147,13 @@ async def periodic_player_list_updater(client, session_key):
             del active_updaters[session_key]
         raise
 
-# NEW FUNCTION: تابع به‌روزرسانی دوره‌ای زمان سؤال
+# تابع به‌روزرسانی دوره‌ای زمان سؤال
 async def periodic_time_updater(client, session_key):
     try:
         while True:
-            await asyncio.sleep(1) # Update every 1 second (can be changed to 3 if desired for less updates)
+            await asyncio.sleep(1) 
             session = game_sessions.get(session_key)
             
-            # Stop if session doesn't exist, question is not active, or game ended
             if not session or not session.get("active_question") or session.get("started") is False:
                 logger.info(f"TIME_UPDATER: Stopping for session {session_key}. Active question status: {session.get('active_question') if session else 'N/A'}")
                 if session_key in active_time_updaters:
@@ -159,7 +162,7 @@ async def periodic_time_updater(client, session_key):
                 break
             
             elapsed = time.time() - session["question_start_time"]
-            remaining_time = max(0, 10 - int(elapsed)) # Ensure time doesn't go negative
+            remaining_time = max(0, 10 - int(elapsed)) 
 
             q = session["questions"][session["current_q_index"]]
             
@@ -170,33 +173,28 @@ async def periodic_time_updater(client, session_key):
                 f"زمان باقی‌مانده: {remaining_time} ثانیه..."
             )
             
-            # Recreate buttons using stored options, so buttons remain clickable
             buttons = [types.KeyboardButtonCallback(text=opt, data=f"answer|{opt}".encode()) for opt in session["current_question_options"]]
             rows = [types.KeyboardButtonRow(buttons[i:i+2]) for i in range(0, len(buttons), 2)]
             markup = types.ReplyInlineMarkup(rows)
 
             try:
-                if session["is_inline_message"]:
-                    event_to_edit = session.get("current_inline_callback_event") or session.get("inline_query_event")
-                    if event_to_edit:
-                        await event_to_edit.edit(text=question_text, buttons=markup)
-                    else:
-                        logger.warning(f"TIME_UPDATER: No event to edit for inline session {session_key}.")
-                else:
+                # Use current_inline_callback_event if available, otherwise inline_query_event
+                event_to_edit = session.get("current_inline_callback_event") or session.get("inline_query_event")
+                if session["is_inline_message"] and event_to_edit:
+                    await event_to_edit.edit(text=question_text, buttons=markup)
+                elif not session["is_inline_message"]:
                     await client.edit_message(
                         entity=session["main_chat_id"],
                         message=session["main_message_id"],
                         text=question_text,
                         buttons=markup
                     )
-                # logger.debug(f"TIME_UPDATER: Updated time for session {session_key}: {remaining_time}s") # Use debug for high frequency logs
             except Exception as e:
-                # This error often means the message was deleted or bot lost access. Stop the updater.
                 logger.error(f"TIME_UPDATER_ERROR: Failed to update message for session {session_key}: {e}", exc_info=True)
                 if session_key in active_time_updaters:
                     active_time_updaters[session_key].cancel()
                     del active_time_updaters[session_key]
-                break # Stop this updater as it's likely broken
+                break
                 
     except asyncio.CancelledError:
         logger.info(f"TIME_UPDATER: Task cancelled for session {session_key}")
@@ -219,7 +217,7 @@ async def start_command_private(event):
         if key in active_timeouts:
             active_timeouts[key].cancel()
             del active_timeouts[key]
-        if key in active_time_updaters: # NEW: Cancel time updater
+        if key in active_time_updaters: 
             active_time_updaters[key].cancel()
             del active_time_updaters[key]
         del game_sessions[key]
@@ -236,7 +234,7 @@ async def start_command_private(event):
     game_sessions[key] = session_data
     logger.info(f"PRIVATE_START: Session created for key '{key}'.")
 
-    text = "🎉 به چالش اطلاعات خوش آمدید!\nبرای شروع یک بازی جدید، دکمه 'دعوت دوستان' را لمس کنید و بازی را در یک گروه یا چت خصوصی با دوستانتان به اشتراک بگیرید."
+    text = "🎉 به چالش اطلاعات خوش آمدید!\nبرای شروع یک بازی جدید، دکمه 'دعوت دوستان' را لمس کنید و بازی را در یک گروه یا چت خصوصی با دوستانتان به اشتراک بگذارید."
     try:
         sent_message = await event.respond(
             text, 
@@ -255,15 +253,17 @@ async def handle_inline_query(event):
         "players": [], "started": False, "starter_id": event.sender_id,
         "questions": random.sample(questions, min(10, len(questions))), "is_inline_message": True,
         "main_message_id": None, "main_chat_id": None, "current_q_index": 0,
-        "temp_uuid_game_session": temp_uuid_game_session, "created_at": time.time(),
+        "temp_uuid_game_session": temp_uuid_game_session, # Store temp UUID
+        "created_at": time.time(),
         "responses": [], "responded_users": [],
         "current_question_options": None,
         "active_question": False,
-        "inline_query_event": event 
+        "inline_query_event": event # Store the initial inline query event for future edits
     }
     game_sessions[temp_uuid_game_session] = session_data
     logger.info(f"INLINE_QUERY: New temp session created with key '{temp_uuid_game_session}'.")
 
+    # Pass temp_uuid to get_initial_markup to embed in 'im_in' button data
     markup = get_initial_markup(session_data, temp_uuid_game_session, is_start_command=False) 
     initial_message_text = (
         "🎉 به چالش اطلاعات خوش آمدید!\n"
@@ -298,43 +298,49 @@ async def handle_buttons(event):
     session = None
     is_inline_callback = False 
 
+    # Determine the session key based on the event type
+    # For inline messages sent by the bot, the message_id is the key
     if event.via_bot_id: 
         is_inline_callback = True
         current_key = str(event.query.msg_id.id) 
-    else: 
+    else: # Private chat or group chat message
         current_key = str(event.chat_id)
 
     logger.info(f"CALLBACK: Received callback from user {user.id} with data '{data}', is_inline_callback={is_inline_callback}, current_key={current_key}")
 
+    # --- Session finding logic ---
     session = game_sessions.get(current_key)
 
-    if not session:
-        if is_inline_callback and data.startswith("im_in_inline_initial|"):
-            temp_uuid = data.split("|")[1]
-            logger.info(f"CALLBACK: No session for '{current_key}'. Attempting to transfer from temp_uuid '{temp_uuid}'")
-            temp_session = game_sessions.get(temp_uuid)
-            if temp_session:
-                temp_session["main_message_id"] = current_key
-                temp_session["main_chat_id"] = event.chat_id 
-                temp_session["is_inline_message"] = True 
-                game_sessions[current_key] = temp_session
-                del game_sessions[temp_uuid] 
-                session = game_sessions[current_key]
-                logger.info(f"CALLBACK: Transferred session from temp key '{temp_uuid}' to '{current_key}'.")
-                data = "im_in"
-            else:
-                logger.error(f"CALLBACK: Temp session '{temp_uuid}' not found for '{current_key}'")
-                await event.answer("این بازی منقضی شده است. لطفاً یک بازی جدید شروع کنید.", alert=True)
-                return
+    # If no session found directly by current_key, it might be the FIRST click on an inline message.
+    # In this case, the button data contains the temporary UUID.
+    if not session and data.startswith("im_in_initial_inline|"):
+        temp_uuid = data.split("|")[1]
+        logger.info(f"CALLBACK: No session for '{current_key}'. Attempting to transfer from temp_uuid '{temp_uuid}'")
+        temp_session = game_sessions.get(temp_uuid)
+        if temp_session:
+            # Transfer the temporary session to the actual inline message ID
+            temp_session["main_message_id"] = current_key # The message ID of the inline message in chat
+            temp_session["main_chat_id"] = event.chat_id # The chat where the inline message was sent
+            temp_session["is_inline_message"] = True # Confirm it's an inline message session
+            game_sessions[current_key] = temp_session
+            del game_sessions[temp_uuid] # Remove the temporary session
+            session = game_sessions[current_key]
+            logger.info(f"CALLBACK: Transferred session from temp key '{temp_uuid}' to '{current_key}'.")
+            data = "im_in" # Reset data to handle the 'im_in' action after transfer
         else:
-            logger.error(f"CALLBACK: No session found for key '{current_key}'")
+            logger.error(f"CALLBACK: Temp session '{temp_uuid}' not found for '{current_key}'")
             await event.answer("این بازی منقضی شده است. لطفاً یک بازی جدید شروع کنید.", alert=True)
-            try:
-                await event.edit("این بازی منقضی شده است.")
-            except Exception as e:
-                logger.error(f"CALLBACK: Failed to edit message to expired status: {e}")
+            try: await event.edit("این بازی منقضی شده است.")
+            except Exception as e: logger.error(f"CALLBACK: Failed to edit message to expired status: {e}")
             return
+    elif not session: # If no session found and it's not the initial inline click
+        logger.error(f"CALLBACK: No session found for key '{current_key}'")
+        await event.answer("این بازی منقضی شده است. لطفاً یک بازی جدید شروع کنید.", alert=True)
+        try: await event.edit("این بازی منقضی شده است.")
+        except Exception as e: logger.error(f"CALLBACK: Failed to edit message to expired status: {e}")
+        return
 
+    # --- Callback data handling ---
     if data == "im_in":
         if session["started"]:
             await event.answer("🚫 بازی شروع شده!", alert=True)
@@ -350,9 +356,10 @@ async def handle_buttons(event):
             text_to_update = "🎉 به چالش اطلاعات خوش آمدید!\nبرای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\n\n" + get_players_text(session)
             markup = get_initial_markup(session, is_start_command=False) 
             try:
-                if is_inline_callback:
+                # Always use event.edit for any callback on an inline message
+                if session["is_inline_message"]: 
                     await event.edit(text=text_to_update, buttons=markup)
-                else:
+                else: # For private/group chat messages (non-inline)
                     await client.edit_message(
                         entity=session["main_chat_id"],
                         message=session["main_message_id"],
@@ -395,7 +402,7 @@ async def handle_buttons(event):
             logger.info(f"CALLBACK: Stopped updater for session {current_key} before starting game")
 
         session["started"] = True
-        if is_inline_callback:
+        if session["is_inline_message"]: # Store the *current* callback event for inline messages
             session["current_inline_callback_event"] = event 
         logger.info(f"CALLBACK: Game started for session {current_key} by user {user.id}")
         await event.answer("🚀 بازی شروع می‌شود!")
@@ -419,7 +426,7 @@ async def handle_buttons(event):
             active_timeouts[current_key].cancel()
             del active_timeouts[current_key]
             logger.info(f"CALLBACK: Cancelled timeout for session {current_key} on game cancel.")
-        if current_key in active_time_updaters: # NEW: Cancel time updater on cancel
+        if current_key in active_time_updaters: 
             active_time_updaters[current_key].cancel()
             del active_time_updaters[current_key]
             logger.info(f"CALLBACK: Cancelled time updater for session {current_key} on game cancel.")
@@ -427,7 +434,7 @@ async def handle_buttons(event):
 
         text_to_update = "❌ بازی توسط شروع‌کننده لغو شد."
         try:
-            if is_inline_callback:
+            if session["is_inline_message"]:
                 await event.edit(text=text_to_update, buttons=None)
             else:
                 await client.edit_message(
@@ -476,7 +483,6 @@ async def ask_question_in_chat(client, session_key):
     rows = [types.KeyboardButtonRow(buttons[i:i+2]) for i in range(0, len(buttons), 2)]
     markup = types.ReplyInlineMarkup(rows)
 
-    # Initial text for the question, time will be updated by the new updater
     question_text = (
         f"{get_players_text(session)}\n\n"
         f"سوال {session['current_q_index'] + 1} از 10\n\n"
@@ -487,14 +493,12 @@ async def ask_question_in_chat(client, session_key):
     logger.info(f"ASK_QUESTION: Sending question {session['current_q_index'] + 1} for session {session_key}, is_inline={session['is_inline_message']}, message_id={session['main_message_id']}")
 
     try:
-        if session["is_inline_message"]:
-            event_to_edit = session.get("current_inline_callback_event") or session.get("inline_query_event")
-            if not event_to_edit:
-                logger.error(f"ASK_QUESTION: No suitable event to edit for inline session {session_key}. Cannot send question.")
-                return
+        # For inline messages, use the stored event to edit
+        event_to_edit = session.get("current_inline_callback_event") or session.get("inline_query_event")
+        if session["is_inline_message"] and event_to_edit:
             await event_to_edit.edit(text=question_text, buttons=markup)
             logger.info(f"ASK_QUESTION: Inline message {session['main_message_id']} updated with question {session['current_q_index'] + 1}")
-        else:
+        elif not session["is_inline_message"]: # For regular chat messages
             await client.edit_message(
                 entity=session["main_chat_id"],
                 message=session["main_message_id"],
@@ -502,38 +506,37 @@ async def ask_question_in_chat(client, session_key):
                 buttons=markup
             )
             logger.info(f"ASK_QUESTION: Chat message {session['main_message_id']} updated with question {session['current_q_index'] + 1}")
-        
+        else:
+            logger.error(f"ASK_QUESTION: Could not find event to edit for session {session_key}. Check main_message_id and inline event storage.")
+            return # Exit if cannot edit message
+
         session["question_start_time"] = time.time()
         session["active_question"] = True 
         
-        # Ensure any previous timeouts are cancelled
         if session_key in active_timeouts:
             active_timeouts[session_key].cancel()
             del active_timeouts[session_key]
             logger.info(f"ASK_QUESTION: Cancelled previous main timeout for session {session_key}")
         
-        # Ensure any previous time updaters are cancelled
-        if session_key in active_time_updaters: # NEW: Cancel previous time updater
+        if session_key in active_time_updaters:
             active_time_updaters[session_key].cancel()
             del active_time_updaters[session_key]
             logger.info(f"ASK_QUESTION: Cancelled previous time updater for session {session_key}")
 
-        # Start the main 10-second timeout task
         timeout_task = asyncio.create_task(question_timeout(client, session_key))
         active_timeouts[session_key] = timeout_task
         logger.info(f"ASK_QUESTION: Started main timeout task for session {session_key}")
 
-        # Start the new periodic time updater task
-        time_updater_task = asyncio.create_task(periodic_time_updater(client, session_key)) # NEW
-        active_time_updaters[session_key] = time_updater_task # NEW
-        logger.info(f"ASK_QUESTION: Started periodic time updater for session {session_key}") # NEW
+        time_updater_task = asyncio.create_task(periodic_time_updater(client, session_key)) 
+        active_time_updaters[session_key] = time_updater_task 
+        logger.info(f"ASK_QUESTION: Started periodic time updater for session {session_key}") 
 
     except Exception as e:
         logger.error(f"ASK_QUESTION_ERROR: Failed to send question for session {session_key}: {e}", exc_info=True)
 
 async def question_timeout(client, session_key):
     try:
-        await asyncio.sleep(10) # Wait for the full 10 seconds
+        await asyncio.sleep(10) 
         if session_key not in game_sessions:
             logger.error(f"TIMEOUT: Session {session_key} not found. Exiting timeout task.")
             return 
@@ -541,7 +544,6 @@ async def question_timeout(client, session_key):
         
         logger.info(f"TIMEOUT: Processing timeout for session {session_key}, question {session['current_q_index'] + 1}")
         
-        # Only proceed if the question is still considered active.
         if session.get("active_question"):
             session["active_question"] = False 
             q = session["questions"][session["current_q_index"]]
@@ -556,12 +558,11 @@ async def question_timeout(client, session_key):
             markup_for_timeout = None 
 
             try:
-                if session["is_inline_message"]:
-                    event_to_edit = session.get("current_inline_callback_event") or session.get("inline_query_event")
-                    if event_to_edit:
-                        await event_to_edit.edit(text=timeout_text, buttons=markup_for_timeout)
-                        logger.info(f"TIMEOUT: Inline message {session['main_message_id']} updated for timeout")
-                else:
+                event_to_edit = session.get("current_inline_callback_event") or session.get("inline_query_event")
+                if session["is_inline_message"] and event_to_edit:
+                    await event_to_edit.edit(text=timeout_text, buttons=markup_for_timeout)
+                    logger.info(f"TIMEOUT: Inline message {session['main_message_id']} updated for timeout")
+                elif not session["is_inline_message"]:
                     await client.edit_message(
                         entity=session["main_chat_id"],
                         message=session["main_message_id"],
@@ -573,8 +574,7 @@ async def question_timeout(client, session_key):
                 logger.error(f"TIMEOUT_EDIT_ERROR: Failed for session {session_key}: {e}", exc_info=True)
                 logger.info(f"TIMEOUT: Continuing despite edit error for session {session_key}")
 
-            # Cancel the time updater here as well, since the main timeout finishes
-            if session_key in active_time_updaters: # NEW: Cancel time updater on main timeout
+            if session_key in active_time_updaters: 
                 active_time_updaters[session_key].cancel()
                 del active_time_updaters[session_key]
                 logger.info(f"TIMEOUT: Cancelled time updater for session {session_key} as main timeout completed.")
@@ -594,8 +594,7 @@ async def question_timeout(client, session_key):
         logger.info(f"TIMEOUT: Task cancelled for session {session_key}")
         if session_key in active_timeouts:
             del active_timeouts[session_key]
-        # Also cancel the time updater if the main timeout task is cancelled
-        if session_key in active_time_updaters: # NEW: Cancel time updater if main timeout is cancelled
+        if session_key in active_time_updaters: 
             active_time_updaters[session_key].cancel()
             del active_time_updaters[session_key]
             logger.info(f"TIMEOUT: Cancelled time updater for session {session_key} as main timeout was cancelled.")
@@ -613,7 +612,7 @@ async def question_timeout(client, session_key):
                 del session["current_question_options"]
             logger.info(f"TIMEOUT: Forcing move to next question, current_q_index={session['current_q_index']} for session {session_key}")
             
-            if session_key in active_time_updaters: # NEW: Cancel time updater on error in main timeout
+            if session_key in active_time_updaters: 
                 active_time_updaters[session_key].cancel()
                 del active_time_updaters[session_key]
                 logger.info(f"TIMEOUT: Cancelled time updater for session {session_key} due to error in main timeout.")
@@ -638,12 +637,11 @@ async def announce_final_results(client, session_key):
     final_markup = types.ReplyInlineMarkup([invite_button])
 
     try:
-        if session["is_inline_message"]:
-            event_to_edit = session.get("current_inline_callback_event") or session.get("inline_query_event")
-            if event_to_edit:
-                await event_to_edit.edit(text=final_text, buttons=final_markup) 
-                logger.info(f"ANNOUNCE_RESULTS: Inline message {session['main_message_id']} updated with final results and invite button")
-        else:
+        event_to_edit = session.get("current_inline_callback_event") or session.get("inline_query_event")
+        if session["is_inline_message"] and event_to_edit:
+            await event_to_edit.edit(text=final_text, buttons=final_markup) 
+            logger.info(f"ANNOUNCE_RESULTS: Inline message {session['main_message_id']} updated with final results and invite button")
+        elif not session["is_inline_message"]:
             await client.edit_message(
                 entity=session["main_chat_id"],
                 message=session["main_message_id"],
@@ -662,7 +660,7 @@ async def announce_final_results(client, session_key):
         active_updaters[session_key].cancel()
         del active_updaters[session_key]
         logger.info(f"ANNOUNCE_RESULTS: Cancelled updater for session {session_key}")
-    if session_key in active_time_updaters: # NEW: Cancel time updater on final results
+    if session_key in active_time_updaters: 
         active_time_updaters[session_key].cancel()
         del active_time_updaters[session_key]
         logger.info(f"ANNOUNCE_RESULTS: Cancelled time updater for session {session_key}")
@@ -736,32 +734,28 @@ async def handle_answer(client, event, session_key, is_inline_callback):
     if len(session["responded_users"]) >= active_players_count and active_players_count > 0:
         logger.info(f"HANDLE_ANSWER: All active players ({len(session['responded_users'])}/{active_players_count}) have responded for session {session_key}. Cancelling timeout.")
         
-        # Cancel the active timeout task if it exists
         if session_key in active_timeouts:
             active_timeouts[session_key].cancel()
             del active_timeouts[session_key]
             logger.info(f"HANDLE_ANSWER: Main timeout task for session {session_key} cancelled.")
         
-        # Cancel the active time updater task
-        if session_key in active_time_updaters: # NEW: Cancel time updater when all users respond
+        if session_key in active_time_updaters: 
             active_time_updaters[session_key].cancel()
             del active_time_updaters[session_key]
             logger.info(f"HANDLE_ANSWER: Time updater task for session {session_key} cancelled.")
 
         session["active_question"] = False 
         
-        # Announce correct answer
         correct_text = (
             f"✅ همه پاسخ دادند!\n"
             f"جواب صحیح: **{correct_answer}**\n\n"
             f"آماده برای سوال بعدی..."
         )
         try:
-            if session["is_inline_message"]:
-                event_to_edit = session.get("current_inline_callback_event") or session.get("inline_query_event")
-                if event_to_edit:
-                    await event_to_edit.edit(text=correct_text, buttons=None)
-            else:
+            event_to_edit = session.get("current_inline_callback_event") or session.get("inline_query_event")
+            if session["is_inline_message"] and event_to_edit:
+                await event_to_edit.edit(text=correct_text, buttons=None)
+            elif not session["is_inline_message"]:
                 await client.edit_message(
                     entity=session["main_chat_id"],
                     message=session["main_message_id"],
@@ -780,12 +774,8 @@ async def handle_answer(client, event, session_key, is_inline_callback):
         
         await asyncio.sleep(2) 
         await ask_question_in_chat(client, session_key)
-        return # Exit to prevent further processing as question has changed
-
-    # If not all players have responded, the time updater will handle display updates
-    # No need to edit the message with remaining time from here.
-    # The `periodic_time_updater` is now solely responsible for updating the time display.
-
+        return 
+    # No else for updating time, as periodic_time_updater handles it
 
 # اجرای دستی ربات
 async def main():
