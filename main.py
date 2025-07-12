@@ -92,7 +92,7 @@ def get_initial_markup(session, temp_uuid_for_initial_inline=None, is_start_comm
     if session["players"] and not session["started"] and session.get("starter_id"):
         rows.append(types.KeyboardButtonRow([types.KeyboardButtonCallback("❌ لغو بازی", data=b"cancel_game")]))
     
-    rows.append(types.KeyboardButtonRow([types.KeyboardButtonSwitchInline("👥 دعوت دوستان", query="")]))
+    rows.append(types.KeyboardButtonRow([types.KeyboardButtonSwitchInline("👥 بازی با دوستان", query="")]))
     return types.ReplyInlineMarkup(rows)
 
 # تابع آپدیت دوره‌ای لیست بازیکنان (فقط برای چت خصوصی)
@@ -492,7 +492,7 @@ async def announce_final_results(client, session_key):
     final_text += "\nبازی تمام شد!"
 
     # Create "Invite Friends" button
-    invite_button = types.KeyboardButtonRow([types.KeyboardButtonSwitchInline("👥 دعوت دوستان", query="")])
+    invite_button = types.KeyboardButtonRow([types.KeyboardButtonSwitchInline("👥 بازی با دوستان", query="")])
     final_markup = types.ReplyInlineMarkup([invite_button])
 
     try:
