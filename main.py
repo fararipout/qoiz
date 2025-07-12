@@ -150,7 +150,7 @@ async def start_command_private(event):
         "questions": random.sample(questions, min(10, len(questions))), "is_inline_message": False,
         "main_message_id": None, "main_chat_id": chat_id, "current_q_index": 0,
         "created_at": time.time(), "responses": [], "responded_users": [],
-        "current_question_options": None # NEW: Added to store shuffled options for current question
+        "current_question_options": None # Added to store shuffled options for current question
     }
     game_sessions[key] = session_data
     logger.info(f"PRIVATE_START: Session created for key '{key}'.")
@@ -176,7 +176,7 @@ async def handle_inline_query(event):
         "main_message_id": None, "main_chat_id": None, "current_q_index": 0,
         "temp_uuid_game_session": temp_uuid_game_session, "created_at": time.time(),
         "responses": [], "responded_users": [],
-        "current_question_options": None # NEW: Added to store shuffled options for current question
+        "current_question_options": None # Added to store shuffled options for current question
     }
     game_sessions[temp_uuid_game_session] = session_data
     logger.info(f"INLINE_QUERY: New temp session created with key '{temp_uuid_game_session}'.")
@@ -361,7 +361,7 @@ async def ask_question_in_chat(client, session_key):
 
     q = session["questions"][session["current_q_index"]]
     
-    # NEW: Shuffle options ONCE and store them in the session for this question
+    # Shuffle options ONCE and store them in the session for this question
     options_list = q["options"][:]
     random.shuffle(options_list)
     session["current_question_options"] = options_list # Store the shuffled options
@@ -426,7 +426,6 @@ async def question_timeout(client, session_key):
                 f"آماده برای سوال بعدی..."
             )
             
-            # Current behavior: buttons=None
             markup_for_timeout = None # Keep buttons None as per your current logic
 
             try:
@@ -452,7 +451,7 @@ async def question_timeout(client, session_key):
             session["current_q_index"] += 1
             session["responses"] = []
             session["responded_users"] = []
-            # NEW: Clear stored options for next question to ensure new shuffle
+            # Clear stored options for next question to ensure new shuffle
             if "current_question_options" in session:
                 del session["current_question_options"]
             logger.info(f"TIMEOUT: Moving to next question, current_q_index={session['current_q_index']} for session {session_key}")
@@ -465,7 +464,6 @@ async def question_timeout(client, session_key):
         raise
     except Exception as e:
         logger.error(f"TIMEOUT_ERROR: Unexpected error in timeout for session {session_key}: {e}", exc_info=True)
-        # ادامه دادن حتی در صورت خطا
         if session_key in game_sessions:
             session = game_sessions[session_key]
             session["current_q_index"] += 1
@@ -489,22 +487,26 @@ async def announce_final_results(client, session_key):
         final_text += f"{'🥇' if i == 0 else '🥈' if i == 1 else '🥉' if i == 2 else '▫️'} {p['name']}: {p['score']} امتیاز\n"
     final_text += "\nبازی تمام شد!"
 
+    # NEW: Create "Invite Friends" button
+    invite_button = types.KeyboardButtonRow([types.KeyboardButtonSwitchInline("👥 دعوت دوستان", query="")])
+    final_markup = types.ReplyInlineMarkup([invite_button])
+
     try:
         if session["is_inline_message"]:
             event = session.get("event")
             if not event:
                 logger.error(f"ANNOUNCE_RESULTS: No event stored for session {session_key}")
                 return
-            await event.edit(text=final_text, buttons=None)
-            logger.info(f"ANNOUNCE_RESULTS: Inline message {session['main_message_id']} updated with final results")
+            await event.edit(text=final_text, buttons=final_markup) # Changed to use final_markup
+            logger.info(f"ANNOUNCE_RESULTS: Inline message {session['main_message_id']} updated with final results and invite button")
         else:
             await client.edit_message(
                 entity=session["main_chat_id"],
                 message=session["main_message_id"],
                 text=final_text,
-                buttons=None
+                buttons=final_markup # Changed to use final_markup
             )
-            logger.info(f"ANNOUNCE_RESULTS: Chat message {session['main_message_id']} updated with final results")
+            logger.info(f"ANNOUNCE_RESULTS: Chat message {session['main_message_id']} updated with final results and invite button")
     except Exception as e:
         logger.error(f"ANNOUNCE_RESULTS_ERROR: Failed for session {session_key}: {e}", exc_info=True)
     
@@ -584,7 +586,7 @@ async def handle_answer(client, event, session_key):
         f"❓ **{q['question']}**\n\n"
         f"زمان باقی‌مانده: {max(0, 10 - int(elapsed))} ثانیه..."
     )
-    # Changed: Use the stored options for button creation
+    # Use the stored options for button creation
     buttons = [types.KeyboardButtonCallback(text=opt, data=f"answer|{opt}".encode()) for opt in session["current_question_options"]]
     rows = [types.KeyboardButtonRow(buttons[i:i+2]) for i in range(0, len(buttons), 2)]  # دو ردیف، هر ردیف دو دکمه
     markup = types.ReplyInlineMarkup(rows)
