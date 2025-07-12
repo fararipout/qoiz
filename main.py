@@ -149,7 +149,8 @@ async def start_command_private(event):
         "players": [], "started": False, "starter_id": event.sender_id,
         "questions": random.sample(questions, min(10, len(questions))), "is_inline_message": False,
         "main_message_id": None, "main_chat_id": chat_id, "current_q_index": 0,
-        "created_at": time.time(), "responses": [], "responded_users": []
+        "created_at": time.time(), "responses": [], "responded_users": [],
+        "current_question_options": None # NEW: Added to store shuffled options for current question
     }
     game_sessions[key] = session_data
     logger.info(f"PRIVATE_START: Session created for key '{key}'.")
@@ -174,7 +175,8 @@ async def handle_inline_query(event):
         "questions": random.sample(questions, min(10, len(questions))), "is_inline_message": True,
         "main_message_id": None, "main_chat_id": None, "current_q_index": 0,
         "temp_uuid_game_session": temp_uuid_game_session, "created_at": time.time(),
-        "responses": [], "responded_users": []
+        "responses": [], "responded_users": [],
+        "current_question_options": None # NEW: Added to store shuffled options for current question
     }
     game_sessions[temp_uuid_game_session] = session_data
     logger.info(f"INLINE_QUERY: New temp session created with key '{temp_uuid_game_session}'.")
@@ -358,8 +360,12 @@ async def ask_question_in_chat(client, session_key):
         return
 
     q = session["questions"][session["current_q_index"]]
+    
+    # NEW: Shuffle options ONCE and store them in the session for this question
     options_list = q["options"][:]
     random.shuffle(options_list)
+    session["current_question_options"] = options_list # Store the shuffled options
+
     buttons = [types.KeyboardButtonCallback(text=opt, data=f"answer|{opt}".encode()) for opt in options_list]
     rows = [types.KeyboardButtonRow(buttons[i:i+2]) for i in range(0, len(buttons), 2)]  # دو ردیف، هر ردیف دو دکمه
     markup = types.ReplyInlineMarkup(rows)
@@ -419,20 +425,24 @@ async def question_timeout(client, session_key):
                 f"جواب صحیح: **{correct_answer}**\n\n"
                 f"آماده برای سوال بعدی..."
             )
+            
+            # Current behavior: buttons=None
+            markup_for_timeout = None # Keep buttons None as per your current logic
+
             try:
                 if session["is_inline_message"]:
                     event = session.get("event")
                     if not event:
                         logger.error(f"TIMEOUT: No event stored for session {session_key}")
                         return
-                    await event.edit(text=timeout_text, buttons=None)
+                    await event.edit(text=timeout_text, buttons=markup_for_timeout)
                     logger.info(f"TIMEOUT: Inline message {session['main_message_id']} updated for timeout")
                 else:
                     await client.edit_message(
                         entity=session["main_chat_id"],
                         message=session["main_message_id"],
                         text=timeout_text,
-                        buttons=None
+                        buttons=markup_for_timeout
                     )
                     logger.info(f"TIMEOUT: Chat message {session['main_message_id']} updated for timeout")
             except Exception as e:
@@ -440,8 +450,11 @@ async def question_timeout(client, session_key):
                 logger.info(f"TIMEOUT: Continuing despite edit error for session {session_key}")
 
             session["current_q_index"] += 1
-            session["responses"] = []  # ریست کردن پاسخ‌ها
-            session["responded_users"] = []  # ریست کردن کاربران پاسخ‌دهنده
+            session["responses"] = []
+            session["responded_users"] = []
+            # NEW: Clear stored options for next question to ensure new shuffle
+            if "current_question_options" in session:
+                del session["current_question_options"]
             logger.info(f"TIMEOUT: Moving to next question, current_q_index={session['current_q_index']} for session {session_key}")
             await asyncio.sleep(2)  # انتظار 2 ثانیه‌ای قبل از سوال بعدی
             await ask_question_in_chat(client, session_key)
@@ -458,6 +471,8 @@ async def question_timeout(client, session_key):
             session["current_q_index"] += 1
             session["responses"] = []
             session["responded_users"] = []
+            if "current_question_options" in session:
+                del session["current_question_options"]
             logger.info(f"TIMEOUT: Forcing move to next question, current_q_index={session['current_q_index']} for session {session_key}")
             await asyncio.sleep(10)
             await ask_question_in_chat(client, session_key)
@@ -553,7 +568,6 @@ async def handle_answer(client, event, session_key):
     if selected == correct_answer:
         earned_score = calculate_score(elapsed)
         player["score"] += earned_score
-        # Changed: Added earned_score to the correct answer message
         response_text = f"✅ آفرین ! درست گفتی | {earned_score} امتیاز" 
     else:
         response_text = "❌ اشتباه !"
@@ -570,7 +584,8 @@ async def handle_answer(client, event, session_key):
         f"❓ **{q['question']}**\n\n"
         f"زمان باقی‌مانده: {max(0, 10 - int(elapsed))} ثانیه..."
     )
-    buttons = [types.KeyboardButtonCallback(text=opt, data=f"answer|{opt}".encode()) for opt in q["options"]]
+    # Changed: Use the stored options for button creation
+    buttons = [types.KeyboardButtonCallback(text=opt, data=f"answer|{opt}".encode()) for opt in session["current_question_options"]]
     rows = [types.KeyboardButtonRow(buttons[i:i+2]) for i in range(0, len(buttons), 2)]  # دو ردیف، هر ردیف دو دکمه
     markup = types.ReplyInlineMarkup(rows)
 
