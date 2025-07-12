@@ -15,6 +15,8 @@ async def health_check(request):
     # فقط یک پاسخ موفقیت‌آمیز برمی‌گردانیم تا پلتفرم بداند برنامه زنده است
     return web.Response(text="Bot is running and healthy!")
 
+logger = logging.getLogger(__name__)
+
 # تنظیم لاگ دقیق‌تر برای عیب‌یابی
 logging.basicConfig(
     level=logging.INFO,
@@ -304,7 +306,7 @@ async def handle_buttons(event):
 
         session["started"] = True
         session["event"] = event  # ذخیره event برای استفاده در ask_question_in_chat
-        logger.info(f"CALLBACK: Game started for session {current_key} by user {user.idAnd}")
+        logger.info(f"CALLBACK: Game started for session {current_key} by user {user.id}")
         await event.answer("🚀 بازی شروع می‌شود!")
         try:
             await ask_question_in_chat(app, current_key)
@@ -539,6 +541,7 @@ async def handle_answer(client, event, session_key):
     if not session.get("active_question"):
         return await event.answer("این سوال دیگر فعال نیست!", alert=True)
 
+    # بررسی اینکه آیا کاربر قبلاً پاسخ داده است
     if user.id in session["responded_users"]:
         return await event.answer("شما قبلاً به این سوال پاسخ داده‌اید!", alert=True)
 
@@ -550,9 +553,9 @@ async def handle_answer(client, event, session_key):
     if selected == correct_answer:
         earned_score = calculate_score(elapsed)
         player["score"] += earned_score
-        response_text = f"answer true (+{earned_score} امتیاز، {elapsed:.1f} ثانیه)"
+        response_text = "✅ آفرین ! درست گفتی" # Changed message
     else:
-        response_text = "answer false"
+        response_text = "❌ اشتباه !" # Changed message
     
     session["responses"].append(response_text)
     session["responded_users"].append(user.id)
@@ -562,12 +565,12 @@ async def handle_answer(client, event, session_key):
     # به‌روزرسانی پیام سوال بدون نمایش پاسخ‌ها
     question_text = (
         f"{get_players_text(session)}\n\n"
-        f"سوال {session['current_q_index'] + 1} از 10\n\n"
+        f"سوال {session['current_q_index'] + 1} از 10\n\n"  # نمایش 10 به جای کل سوالات
         f"❓ **{q['question']}**\n\n"
         f"زمان باقی‌مانده: {max(0, 10 - int(elapsed))} ثانیه..."
     )
     buttons = [types.KeyboardButtonCallback(text=opt, data=f"answer|{opt}".encode()) for opt in q["options"]]
-    rows = [types.KeyboardButtonRow(buttons[i:i+2]) for i in range(0, len(buttons), 2)]
+    rows = [types.KeyboardButtonRow(buttons[i:i+2]) for i in range(0, len(buttons), 2)]  # دو ردیف، هر ردیف دو دکمه
     markup = types.ReplyInlineMarkup(rows)
 
     try:
@@ -584,8 +587,10 @@ async def handle_answer(client, event, session_key):
             logger.info(f"HANDLE_ANSWER: Chat message {session['main_message_id']} updated")
     except Exception as e:
         logger.error(f"HANDLE_ANSWER_EDIT_ERROR: Failed for session {session_key}: {e}", exc_info=True)
+        logger.info(f"HANDLE_ANSWER: Continuing despite edit error for session {session_key}")
 
 # اجرای دستی ربات
+# تابع main قبلی را حذف کرده و این را جایگزین کنید
 async def main():
     # ۱. ربات را استارت بزنید. این در پس‌زمینه اجرا خواهد شد.
     await app.start(bot_token=BOT_TOKEN)
