@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # راه‌اندازی ربات
 API_ID = '3335796'
 API_HASH = '138b992a0e672e8346d8439c3f42ea78'
-BOT_TOKEN = '8189638115:AAEYMDvummCXAPgdpavZbYHa3YuXpOzkRBY'
+BOT_TOKEN = '5002292255:AAGc9Lk0LXX1cjfERx6CnVye0A5EUNvgtzU'
 
 app = TelegramClient("watermark_bot", api_id=API_ID, api_hash=API_HASH)
 
@@ -92,7 +92,7 @@ def get_initial_markup(session, temp_uuid_for_initial_inline=None, is_start_comm
     if session["players"] and not session["started"] and session.get("starter_id"):
         rows.append(types.KeyboardButtonRow([types.KeyboardButtonCallback("❌ لغو بازی", data=b"cancel_game")]))
     
-    rows.append(types.KeyboardButtonRow([types.KeyboardButtonSwitchInline("👥 بازی با دوستان", query="")]))
+    rows.append(types.KeyboardButtonRow([types.KeyboardButtonSwitchInline("👥 دعوت دوستان", query="")]))
     return types.ReplyInlineMarkup(rows)
 
 # تابع آپدیت دوره‌ای لیست بازیکنان (فقط برای چت خصوصی)
@@ -152,7 +152,8 @@ async def start_command_private(event):
         "questions": random.sample(questions, min(10, len(questions))), "is_inline_message": False,
         "main_message_id": None, "main_chat_id": chat_id, "current_q_index": 0,
         "created_at": time.time(), "responses": [], "responded_users": [],
-        "current_question_options": None 
+        "current_question_options": None, # Added to store shuffled options for current question
+        "active_question": False # Track if a question is actively being answered
     }
     game_sessions[key] = session_data
     logger.info(f"PRIVATE_START: Session created for key '{key}'.")
@@ -160,9 +161,8 @@ async def start_command_private(event):
     # The initial /start message will ONLY have the "Invite Friends" button
     text = "🎉 به چالش اطلاعات خوش آمدید!\nبرای شروع یک بازی جدید، دکمه 'دعوت دوستان' را لمس کنید و بازی را در یک گروه یا چت خصوصی با دوستانتان به اشتراک بگذارید."
     try:
-        # CHANGED: Removed get_players_text(session_data) from the message
         sent_message = await event.respond(
-            text, # Changed this line
+            text, 
             buttons=get_initial_markup(session_data, is_start_command=True)
         )
         session_data["main_message_id"] = sent_message.id
@@ -180,7 +180,8 @@ async def handle_inline_query(event):
         "main_message_id": None, "main_chat_id": None, "current_q_index": 0,
         "temp_uuid_game_session": temp_uuid_game_session, "created_at": time.time(),
         "responses": [], "responded_users": [],
-        "current_question_options": None 
+        "current_question_options": None, # Added to store shuffled options for current question
+        "active_question": False # Track if a question is actively being answered
     }
     game_sessions[temp_uuid_game_session] = session_data
     logger.info(f"INLINE_QUERY: New temp session created with key '{temp_uuid_game_session}'.")
@@ -331,6 +332,13 @@ async def handle_buttons(event):
             del active_updaters[current_key]
             logger.info(f"CALLBACK: Stopped updater for session {current_key} on cancel")
 
+        # Cancel any active timeout if game is cancelled
+        if current_key in active_timeouts:
+            active_timeouts[current_key].cancel()
+            del active_timeouts[current_key]
+            logger.info(f"CALLBACK: Cancelled timeout for session {current_key} on game cancel.")
+
+
         text_to_update = "❌ بازی توسط شروع‌کننده لغو شد."
         try:
             await event.edit(text=text_to_update, buttons=None)
@@ -401,7 +409,13 @@ async def ask_question_in_chat(client, session_key):
             logger.info(f"ASK_QUESTION: Chat message {session['main_message_id']} updated with question {session['current_q_index'] + 1}")
         
         session["question_start_time"] = time.time()
-        session["active_question"] = True
+        session["active_question"] = True # Set question as active
+        
+        # Cancel any previous timeout task to prevent overlap
+        if session_key in active_timeouts:
+            active_timeouts[session_key].cancel()
+            del active_timeouts[session_key]
+            logger.info(f"ASK_QUESTION: Cancelled previous timeout for session {session_key}")
 
         timeout_task = asyncio.create_task(question_timeout(client, session_key))
         active_timeouts[session_key] = timeout_task
@@ -419,8 +433,9 @@ async def question_timeout(client, session_key):
         
         logger.info(f"TIMEOUT: Processing timeout for session {session_key}, question {session['current_q_index'] + 1}")
         
+        # Only proceed if the question is still considered active (i.e., not all players responded early)
         if session.get("active_question"):
-            session["active_question"] = False
+            session["active_question"] = False # Mark question as inactive
             q = session["questions"][session["current_q_index"]]
             correct_answer = q["answer"]
             timeout_text = (
@@ -430,7 +445,7 @@ async def question_timeout(client, session_key):
                 f"آماده برای سوال بعدی..."
             )
             
-            markup_for_timeout = None 
+            markup_for_timeout = None # Keep buttons None as per your current logic
 
             try:
                 if session["is_inline_message"]:
@@ -455,7 +470,6 @@ async def question_timeout(client, session_key):
             session["current_q_index"] += 1
             session["responses"] = []
             session["responded_users"] = []
-            # Clear stored options for next question to ensure new shuffle
             if "current_question_options" in session:
                 del session["current_question_options"]
             logger.info(f"TIMEOUT: Moving to next question, current_q_index={session['current_q_index']} for session {session_key}")
@@ -465,9 +479,10 @@ async def question_timeout(client, session_key):
         logger.info(f"TIMEOUT: Task cancelled for session {session_key}")
         if session_key in active_timeouts:
             del active_timeouts[session_key]
-        raise
+        raise # Re-raise to ensure the task truly stops
     except Exception as e:
         logger.error(f"TIMEOUT_ERROR: Unexpected error in timeout for session {session_key}: {e}", exc_info=True)
+        # Attempt to proceed to next question even on error
         if session_key in game_sessions:
             session = game_sessions[session_key]
             session["current_q_index"] += 1
@@ -476,8 +491,9 @@ async def question_timeout(client, session_key):
             if "current_question_options" in session:
                 del session["current_question_options"]
             logger.info(f"TIMEOUT: Forcing move to next question, current_q_index={session['current_q_index']} for session {session_key}")
-            await asyncio.sleep(10)
+            await asyncio.sleep(2) # Short delay before next question
             await ask_question_in_chat(client, session_key)
+
 
 async def announce_final_results(client, session_key):
     if session_key not in game_sessions:
@@ -492,7 +508,7 @@ async def announce_final_results(client, session_key):
     final_text += "\nبازی تمام شد!"
 
     # Create "Invite Friends" button
-    invite_button = types.KeyboardButtonRow([types.KeyboardButtonSwitchInline("👥 بازی با دوستان", query="")])
+    invite_button = types.KeyboardButtonRow([types.KeyboardButtonSwitchInline("👥 دعوت دوستان", query="")])
     final_markup = types.ReplyInlineMarkup([invite_button])
 
     try:
@@ -514,15 +530,19 @@ async def announce_final_results(client, session_key):
     except Exception as e:
         logger.error(f"ANNOUNCE_RESULTS_ERROR: Failed for session {session_key}: {e}", exc_info=True)
     
-    if session_key in game_sessions:
-        del game_sessions[session_key]
-        logger.info(f"ANNOUNCE_RESULTS: Session {session_key} deleted")
+    # Ensure all related tasks are cancelled and session cleaned up
     if session_key in active_timeouts:
         active_timeouts[session_key].cancel()
         del active_timeouts[session_key]
+        logger.info(f"ANNOUNCE_RESULTS: Cancelled timeout for session {session_key}")
     if session_key in active_updaters:
         active_updaters[session_key].cancel()
         del active_updaters[session_key]
+        logger.info(f"ANNOUNCE_RESULTS: Cancelled updater for session {session_key}")
+    if session_key in game_sessions:
+        del game_sessions[session_key]
+        logger.info(f"ANNOUNCE_RESULTS: Session {session_key} deleted")
+
 
 def calculate_score(elapsed):
     elapsed_rounded = int(elapsed)  # گرد کردن به عدد کامل (ثانیه)
@@ -559,12 +579,15 @@ async def handle_answer(client, event, session_key):
     if not player:
         return await event.answer("شما در این بازی شرکت نکرده‌اید!", alert=True)
 
+    # Crucial: Check if the question is still active BEFORE processing the answer
     if not session.get("active_question"):
-        return await event.answer("این سوال دیگر فعال نیست!", alert=True)
+        logger.warning(f"HANDLE_ANSWER: User {user.id} answered an inactive question for session {session_key}")
+        return await event.answer("این سوال دیگر فعال نیست یا زمان آن به پایان رسیده!", alert=True)
 
     # بررسی اینکه آیا کاربر قبلاً پاسخ داده است
     if user.id in session["responded_users"]:
-        return await event.answer("شما قبلاً به این سوال پاسخ داده‌اید!", alert=True)
+        logger.warning(f"HANDLE_ANSWER: User {user.id} already responded to current question for session {session_key}")
+        return await event.answer("شما قبلاً به این سوال پاسخ داده‌اید!", alert=False) # Changed to alert=False for less intrusive feedback
 
     selected = event.data.decode('utf-8').split("|")[1]
     q = session["questions"][session["current_q_index"]]
@@ -583,7 +606,53 @@ async def handle_answer(client, event, session_key):
     await event.answer(response_text, alert=False) 
     logger.info(f"HANDLE_ANSWER: User {user.id} answered for session {session_key}, correct={selected == correct_answer}, score={player['score']}, responses={session['responses']}")
 
-    # به‌روزرسانی پیام سوال بدون نمایش پاسخ‌ها
+    # Check if all active players have responded
+    # Filter out players who might have left or are inactive
+    active_players_in_game = [p for p in session["players"] if p["id"] in [pl["id"] for pl in session["players"]]] # This line ensures only truly active players are counted.
+    
+    # If all active players have responded, cancel the timeout and move to the next question
+    if len(session["responded_users"]) >= len(active_players_in_game) and len(active_players_in_game) > 0:
+        logger.info(f"HANDLE_ANSWER: All active players ({len(session['responded_users'])}/{len(active_players_in_game)}) have responded for session {session_key}. Cancelling timeout.")
+        if session_key in active_timeouts:
+            active_timeouts[session_key].cancel()
+            del active_timeouts[session_key]
+            logger.info(f"HANDLE_ANSWER: Timeout task for session {session_key} cancelled.")
+        
+        session["active_question"] = False # Mark question as inactive
+        session["current_q_index"] += 1
+        session["responses"] = []
+        session["responded_users"] = []
+        if "current_question_options" in session:
+            del session["current_question_options"]
+        
+        # Announce correct answer before moving to next question (optional, but good for feedback)
+        correct_text = (
+            f"✅ همه پاسخ دادند!\n"
+            f"جواب صحیح: **{correct_answer}**\n\n"
+            f"آماده برای سوال بعدی..."
+        )
+        try:
+            if session["is_inline_message"]:
+                # If inline, we need the original event to edit
+                original_event = session.get("event")
+                if original_event:
+                    await original_event.edit(text=correct_text, buttons=None)
+            else:
+                await client.edit_message(
+                    entity=session["main_chat_id"],
+                    message=session["main_message_id"],
+                    text=correct_text,
+                    buttons=None
+                )
+            logger.info(f"HANDLE_ANSWER: Message updated with collective correct answer for session {session_key}")
+        except Exception as e:
+            logger.error(f"HANDLE_ANSWER_EDIT_ERROR: Failed to update message after all responses for session {session_key}: {e}", exc_info=True)
+
+        await asyncio.sleep(2) # Short delay before next question
+        await ask_question_in_chat(client, session_key)
+        return # Exit to prevent further processing of the answer
+
+    # Update the message with remaining time for other players (if not all responded yet)
     question_text = (
         f"{get_players_text(session)}\n\n"
         f"سوال {session['current_q_index'] + 1} از 10\n\n"  
@@ -597,8 +666,11 @@ async def handle_answer(client, event, session_key):
 
     try:
         if session["is_inline_message"]:
-            await event.edit(text=question_text, buttons=markup)
-            logger.info(f"HANDLE_ANSWER: Inline message {session['main_message_id']} updated")
+            # For inline messages, we must use the original event that triggered the question
+            original_event = session.get("event")
+            if original_event:
+                await original_event.edit(text=question_text, buttons=markup)
+                logger.info(f"HANDLE_ANSWER: Inline message {session['main_message_id']} updated with remaining time")
         else:
             await client.edit_message(
                 entity=session["main_chat_id"],
@@ -606,10 +678,11 @@ async def handle_answer(client, event, session_key):
                 text=question_text,
                 buttons=markup
             )
-            logger.info(f"HANDLE_ANSWER: Chat message {session['main_message_id']} updated")
+            logger.info(f"HANDLE_ANSWER: Chat message {session['main_message_id']} updated with remaining time")
     except Exception as e:
-        logger.error(f"HANDLE_ANSWER_EDIT_ERROR: Failed for session {session_key}: {e}", exc_info=True)
-        logger.info(f"HANDLE_ANSWER: Continuing despite edit error for session {session_key}")
+        logger.error(f"HANDLE_ANSWER_EDIT_ERROR: Failed to update message with remaining time for session {session_key}: {e}", exc_info=True)
+        # Log error but don't prevent flow, as the timeout will eventually handle it
+
 
 # اجرای دستی ربات
 async def main():
