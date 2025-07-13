@@ -10,14 +10,14 @@ from telethon.tl.types import InputBotInlineResult, InputBotInlineMessageText
 from telethon.errors.rpcerrorlist import MessageNotModifiedError
 
 # فرض می‌شود فایل tes/question.py با لیستی از سوالات وجود دارد
-# from tes.question import questions
+from tes.question import questions
 # برای تست، یک لیست نمونه اینجا قرار می‌دهیم
-questions = [
-    {"question": "پایتخت ایران کجاست؟", "options": ["اصفهان", "شیراز", "تهران", "تبریز"], "answer": "تهران"},
-    {"question": "کدام سیاره به سیاره سرخ معروف است؟", "options": ["مریخ", "زهره", "مشتری", "زمین"], "answer": "مریخ"},
-    {"question": "بزرگترین اقیانوس جهان کدام است؟", "options": ["اطلس", "هند", "آرام", "منجمد شمالی"], "answer": "آرام"},
+#questions = [
+#    {"question": "پایتخت ایران کجاست؟", "options": ["اصفهان", "شیراز", "تهران", "تبریز"], "answer": "تهران"},
+   # {"question": "کدام سیاره به سیاره سرخ معروف است؟", "options": ["مریخ", "زهره", "مشتری", "زمین"], "answer": "مریخ"},
+   # {"question": "بزرگترین اقیانوس جهان کدام است؟", "options": ["اطلس", "هند", "آرام", "منجمد شمالی"], "answer": "آرام"},
     # ... (حداقل ۱۰ سوال اضافه کنید)
-]
+#]
 for i in range(4, 11):
     questions.append({"question": f"سوال نمونه {i}", "options": [f"الف {i}", f"ب {i}", f"ج {i}", f"د {i}"], "answer": f"الف {i}"})
 
