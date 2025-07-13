@@ -145,7 +145,7 @@ async def update_question_timer(client, session_key):
         await asyncio.sleep(3)  # به‌روزرسانی هر 3 ثانیه
 
 # تابع به‌روزرسانی دوره‌ای لیست بازیکنان
-asyncisso def periodic_player_list_updater(client, session_key):
+async def periodic_player_list_updater(client, session_key):
     try:
         while True:
             await asyncio.sleep(5)
