@@ -1,10 +1,11 @@
+
 import asyncio
 import time
 import uuid
 import logging
 import random
 import os
-from aiohttp import web  
+from aiohttp import web
 from telethon import TelegramClient, events, types
 from telethon.tl.types import InputBotInlineResult, InputBotInlineMessageText
 from tes.question import questions
@@ -38,7 +39,7 @@ app = TelegramClient("watermark_bot", api_id=API_ID, api_hash=API_HASH)
 game_sessions = {}
 active_timeouts = {}
 active_updaters = {}
-message_lock = Lock()  # قفل برای جلوگیری از ویرایش همزمان پیام‌ها
+message_lock = Lock()
 
 # داکیومنت نسخه Telethon هنگام شروع
 import telethon
@@ -48,7 +49,7 @@ logger.info(f"Telethon version: {telethon.__version__}")
 async def cleanup_old_sessions():
     try:
         while True:
-            await asyncio.sleep(600)  # هر 10 دقیقه
+            await asyncio.sleep(600)
             expired_keys = [key for key, session in game_sessions.items() if time.time() - session.get("created_at", time.time()) > 600]
             for key in expired_keys:
                 logger.info(f"Cleaning up expired session {key}")
@@ -142,7 +143,7 @@ async def update_question_timer(client, session_key):
                 logger.error(f"UPDATE_TIMER_ERROR: Failed for session {session_key}: {e}", exc_info=True)
                 break
 
-        await asyncio.sleep(3)  # به‌روزرسانی هر 3 ثانیه
+        await asyncio.sleep(3)
 
 # تابع به‌روزرسانی دوره‌ای لیست بازیکنان
 async def periodic_player_list_updater(client, session_key):
@@ -158,7 +159,7 @@ async def periodic_player_list_updater(client, session_key):
                 
             text_to_update = (
                 "🎉 به چالش اطلاعات خوش آمدید!\n"
-                "برای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\-unit\n"
+                "برای شرکت در بازی روی دکمه 'من پایه‌ام' کلیک کنید.\n\n"
                 f"{get_players_text(session)}"
             )
             markup = get_initial_markup(session, is_start_command=False)
@@ -197,6 +198,7 @@ async def start_command_private(event):
 
     session_data = {
         "players": [], "started": False, "starter_id": event.sender_id,
+
         "questions": random.sample(questions, min(10, len(questions))), "is_inline_message": False,
         "main_message_id": None, "main_chat_id": chat_id, "current_q_index": 0,
         "created_at": time.time(), "responses": [], "responded_users": [],
@@ -283,7 +285,7 @@ async def handle_buttons(event):
                     if temp_session:
                         temp_session["main_message_id"] = current_key
                         game_sessions[current_key] = temp_session
-                        del game_sessions[temp_temp_uuid]
+                        del game_sessions[temp_uuid]
                         session = game_sessions[current_key]
                         logger.info(f"CALLBACK: Transferred session from temp key '{temp_uuid}' to '{current_key}'.")
                         data = "im_in"
@@ -450,7 +452,6 @@ async def ask_question_in_chat(client, session_key):
     session["question_start_time"] = time.time()
     session["active_question"] = True
 
-    # شروع تایمر و به‌روزرسانی دوره‌ای
     timeout_task = asyncio.create_task(question_timeout(client, session_key))
     active_timeouts[session_key] = timeout_task
     timer_task = asyncio.create_task(update_question_timer(client, session_key))
@@ -479,7 +480,7 @@ async def question_timeout(client, session_key):
                 player = next((p for p in session["players"] if p["id"] == user_id), None)
                 if player and selected == correct_answer:
                     earned_score = calculate_score(elapsed)
-                    player["score"] += (earned_score)
+                    player["score"] += earned_score
                     response["result"] = f"✅ درست | {earned_score} امتیاز"
                 else:
                     response["result"] = "❌ اشتباه"
