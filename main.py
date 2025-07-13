@@ -198,8 +198,8 @@ async def start_command_private(event):
 
     session_data = {
         "players": [], "started": False, "starter_id": event.sender_id,
-
-        "questions": random.sample(questions, min(10, len(questions))), "is_inline_message": False,
+        "questions": random.sample(questions, min(len(questions), len(questions))),  # استفاده از همه سوالات موجود
+        "is_inline_message": False,
         "main_message_id": None, "main_chat_id": chat_id, "current_q_index": 0,
         "created_at": time.time(), "responses": [], "responded_users": [],
         "current_question_options": None
@@ -224,7 +224,8 @@ async def handle_inline_query(event):
     temp_uuid_game_session = str(uuid.uuid4())
     session_data = {
         "players": [], "started": False, "starter_id": event.sender_id,
-        "questions": random.sample(questions, min(10, len(questions))), "is_inline_message": True,
+        "questions": random.sample(questions, min(len(questions), len(questions))),  # استفاده از همه سوالات موجود
+        "is_inline_message": True,
         "main_message_id": None, "main_chat_id": None, "current_q_index": 0,
         "temp_uuid_game_session": temp_uuid_game_session, "created_at": time.time(),
         "responses": [], "responded_users": [],
@@ -252,7 +253,7 @@ async def handle_inline_query(event):
         )
     ]
     try:
-        await event.answer(results, cache_time=1)
+        await event.answer(results, cache_time=300)
         logger.info(f"INLINE_QUERY: Answered inline query for user {event.sender_id}")
     except Exception as e:
         logger.error(f"INLINE_QUERY_ERROR: Failed to answer inline query: {e}", exc_info=True)
@@ -348,7 +349,7 @@ async def handle_buttons(event):
                 await event.answer("فقط شروع‌کننده می‌تواند بازی را استارت بزند!", alert=True)
                 logger.info(f"CALLBACK: Start game rejected for session {current_key} - user {user.id} is not starter")
                 return
-        
+            
             if current_key in active_updaters:
                 active_updaters[current_key].cancel()
                 del active_updaters[current_key]
@@ -357,12 +358,35 @@ async def handle_buttons(event):
             session["started"] = True
             session["event"] = event
             logger.info(f"CALLBACK: Game started for session {current_key} by user {user.id}")
+            
+            # بررسی وجود main_message_id و event
+            if session["is_inline_message"] and not session.get("event"):
+                logger.error(f"CALLBACK: No event stored for inline session {current_key}")
+                await event.edit("خطا: رویداد پیام اینلاین پیدا نشد!")
+                await announce_final_results(app, current_key)
+                return
+            if not session.get("main_message_id"):
+                logger.error(f"CALLBACK: No main_message_id for session {current_key}")
+                await event.edit("خطا: پیام اصلی بازی پیدا نشد!")
+                await announce_final_results(app, current_key)
+                return
+            
+            # بررسی وجود سوالات
+            if not session["questions"]:
+                logger.error(f"CALLBACK: No questions available for session {current_key}")
+                await event.edit("خطا: هیچ سوالی برای بازی وجود ندارد!")
+                await announce_final_results(app, current_key)
+                return
+            
             await event.answer("🚀 بازی شروع می‌شود!")
             try:
+                logger.info(f"CALLBACK: Calling ask_question_in_chat for session {current_key}")
                 await ask_question_in_chat(app, current_key)
-                logger.info(f"CALLBACK: ask_question_in_chat called for session {current_key}")
+                logger.info(f"CALLBACK: ask_question_in_chat completed for session {current_key}")
             except Exception as e:
                 logger.error(f"CALLBACK_ERROR: Failed to start question for session {current_key}: {e}", exc_info=True)
+                await event.edit(f"خطا در شروع بازی: {str(e)}")
+                await announce_final_results(app, current_key)
 
         elif data == "cancel_game":
             if user.id != session.get("starter_id"):
@@ -383,7 +407,7 @@ async def handle_buttons(event):
                 logger.info(f"CALLBACK: Message {current_key} updated to cancelled")
             except Exception as e:
                 logger.error(f"CALLBACK_ERROR on cancel: Failed to update message for session {current_key}: {e}", exc_info=True)
-        
+            
             if current_key in game_sessions:
                 del game_sessions[current_key]
                 logger.info(f"CALLBACK: Session {current_key} deleted due to cancellation")
@@ -397,23 +421,51 @@ async def ask_question_in_chat(client, session_key):
         logger.error(f"ASK_QUESTION: Session {session_key} not found")
         return
     session = game_sessions[session_key]
+    logger.info(f"ASK_QUESTION: Starting for session {session_key}, current_q_index={session['current_q_index']}, main_message_id={session.get('main_message_id')}, is_inline={session['is_inline_message']}")
+    
     session["responses"] = []
     session["responded_users"] = []
 
-    if session["current_q_index"] >= 10:
+    if session["current_q_index"] >= len(session["questions"]):
         logger.info(f"ASK_QUESTION: No more questions for session {session_key}, announcing results")
         await announce_final_results(client, session_key)
         return
 
     if not session.get("main_message_id"):
         logger.error(f"ASK_QUESTION: No main_message_id for session {session_key}")
-        await client.send_message(session["main_chat_id"], "خطا: پیام اصلی بازی پیدا نشد!")
+        if session.get("main_chat_id"):
+            await client.send_message(session["main_chat_id"], "خطا: پیام اصلی بازی پیدا نشد!")
+        await announce_final_results(client, session_key)
         return
 
-    q = session["questions"][session["current_q_index"]]
+    # بررسی وجود سوالات
+    if not session["questions"]:
+        logger.error(f"ASK_QUESTION: No questions available for session {session_key}")
+        if session.get("main_chat_id"):
+            await client.send_message(session["main_chat_id"], "خطا: هیچ سوالی برای بازی وجود ندارد!")
+        await announce_final_results(client, session_key)
+        return
+
+    try:
+        q = session["questions"][session["current_q_index"]]
+        logger.info(f"ASK_QUESTION: Loaded question {session['current_q_index'] + 1}: {q['question']}")
+        if not q or "question" not in q or "options" not in q or "answer" not in q:
+            logger.error(f"ASK_QUESTION: Invalid question structure at index {session['current_q_index']} for session {session_key}")
+            if session.get("main_chat_id"):
+                await client.send_message(session["main_chat_id"], "خطا: ساختار سوال نامعتبر است!")
+            await announce_final_results(client, session_key)
+            return
+    except IndexError:
+        logger.error(f"ASK_QUESTION: Question index {session['current_q_index']} out of range for session {session_key}")
+        if session.get("main_chat_id"):
+            await client.send_message(session["main_chat_id"], "خطا: سوال نامعتبر است!")
+        await announce_final_results(client, session_key)
+        return
+
     options_list = q["options"][:]
     random.shuffle(options_list)
     session["current_question_options"] = options_list
+    logger.info(f"ASK_QUESTION: Options for question {session['current_q_index'] + 1}: {options_list}")
 
     buttons = [types.KeyboardButtonCallback(text=opt, data=f"answer|{opt}".encode()) for opt in options_list]
     rows = [types.KeyboardButtonRow(buttons[i:i+2]) for i in range(0, len(buttons), 2)]
@@ -421,7 +473,7 @@ async def ask_question_in_chat(client, session_key):
 
     question_text = (
         f"{get_players_text(session)}\n\n"
-        f"سوال {session['current_q_index'] + 1} از 10\n\n"
+        f"سوال {session['current_q_index'] + 1} از {len(session['questions'])}\n\n"
         f"❓ **{q['question']}**\n\n"
         f"زمان باقی‌مانده: 10 ثانیه..."
     )
@@ -432,10 +484,14 @@ async def ask_question_in_chat(client, session_key):
                 event = session.get("event")
                 if not event:
                     logger.error(f"ASK_QUESTION: No event stored for session {session_key}")
+                    if session.get("main_chat_id"):
+                        await client.send_message(session["main_chat_id"], "خطا: رویداد پیام اینلاین پیدا نشد!")
                     await announce_final_results(client, session_key)
                     return
+                logger.info(f"ASK_QUESTION: Editing inline message for session {session_key}")
                 await event.edit(text=question_text, buttons=markup)
             else:
+                logger.info(f"ASK_QUESTION: Editing chat message {session['main_message_id']} for session {session_key}")
                 await client.edit_message(
                     entity=session["main_chat_id"],
                     message=session["main_message_id"],
@@ -445,7 +501,8 @@ async def ask_question_in_chat(client, session_key):
             logger.info(f"ASK_QUESTION: Question {session['current_q_index'] + 1} sent for session {session_key}")
         except Exception as e:
             logger.error(f"ASK_QUESTION_ERROR: Failed to send question for session {session_key}: {e}", exc_info=True)
-            await client.send_message(session["main_chat_id"], "خطا در نمایش سوال. بازی متوقف شد.")
+            if session.get("main_chat_id"):
+                await client.send_message(session["main_chat_id"], f"خطا در نمایش سوال: {str(e)}")
             await announce_final_results(client, session_key)
             return
 
