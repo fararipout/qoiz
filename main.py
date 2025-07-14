@@ -236,10 +236,8 @@ async def ask_question_in_chat(client, session_key):
         await announce_final_results(client, session_key)
         return
 
-    # لغو تایمر قبلی (اگر وجود دارد)
     cancel_timeout_task(session_key)
 
-    # مقداردهی وضعیت قبل از ارسال سوال
     session["responded_users"].clear()
     session["active_question"] = True
     session["question_start_time"] = time.time()
@@ -259,7 +257,6 @@ async def ask_question_in_chat(client, session_key):
     full_text = get_players_text(session) + "\n\n" + question_text
     await edit_game_message(client, session, full_text, markup)
 
-    # ایجاد تایمر جدید بعد از ارسال سوال
     timeout_task = asyncio.create_task(question_timeout(client, session_key))
     active_timeouts[session_key] = timeout_task
     logger.info(f"ASK_QUESTION: Question {session['current_q_index'] + 1} sent. New timeout task created for session {session_key}.")
@@ -283,13 +280,19 @@ async def question_timeout(client, session_key):
             f"آماده برای سوال بعدی..."
         )
         await edit_game_message(client, session, timeout_text, None)
+        
+        # اینجا current_q_index را زیاد کن
         session["current_q_index"] += 1
 
         # قبل از رفتن به سوال بعدی، مطمئن شو تایمر قبلی پاک شده
         cancel_timeout_task(session_key)
 
         await asyncio.sleep(3)
-        await ask_question_in_chat(client, session_key)
+        # اگر سوالات تمام شده بود، نتایج را اعلام کن
+        if session["current_q_index"] >= len(session["questions"]):
+            await announce_final_results(client, session_key)
+        else:
+            await ask_question_in_chat(client, session_key)
     except asyncio.CancelledError:
         logger.info(f"TIMEOUT: Task for session {session_key} was cancelled as expected.")
     except Exception as e:
