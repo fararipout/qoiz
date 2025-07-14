@@ -77,12 +77,28 @@ async def cleanup_old_sessions():
         raise
 
 # تابع کمکی برای ایجاد متن لیست بازیکنان
+# تابع کمکی برای ایجاد متن لیست بازیکنان (نسخه اصلاح شده و خوانا)
 def get_players_text(session):
     if not session["players"]:
         return "🧑‍🤝‍🧑 لیست پایه‌ها:\n(هنوز کسی پایه نیست)"
+
     text = "🧑‍🤝‍🧑 لیست پایه‌ها:\n"
+    # مرتب‌سازی بازیکنان بر اساس امتیاز به ترتیب نزولی
     sorted_players = sorted(session["players"], key=lambda p: p['score'], reverse=True)
-    player_lines = [f"👤 {p['name']}{f' | امتیاز: {p['score']}' if session['started'] else ''}" for p in sorted_players]
+    
+    player_lines = []
+    for p in sorted_players:
+        # ابتدا نام بازیکن را اضافه می‌کنیم
+        # اینجا مشکلی نیست چون f-string با "" و کلید با '' است
+        line = f"👤 {p['name']}"
+        
+        # اگر بازی شروع شده بود، امتیاز را اضافه می‌کنیم
+        if session['started']:
+            score = p['score']
+            line += f" | امتیاز: {score}" # این روش بسیار امن‌تر است
+            
+        player_lines.append(line)
+        
     text += "\n".join(player_lines)
     return text
 
